@@ -1,7 +1,7 @@
-# DO NOT CHANGE this to just llm_builder, it will create a venv
+# DO NOT CHANGE this to just lm_builder, it will create a venv
 # in the projects main folder and when a user run `make destory`
 # it will remove every file in there
-VENV_NAME = "llm_builder_venv"
+VENV_NAME = "lm_builder_venv"
 
 setup: create_venv
 	@echo "Activate the venv with: \`source ./$(VENV_NAME)/bin/activate\`"

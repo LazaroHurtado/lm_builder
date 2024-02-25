@@ -4,9 +4,9 @@ import tiktoken
 import torch
 import torch.nn as nn
 
-from llm_builder.ffn import FeedForwardConfig
-from llm_builder.transformer import Transformer, TransformerConfig
-from llm_builder.utils import change_state_dict_names
+from lm_builder.ffn import FeedForwardConfig
+from lm_builder.transformer import Transformer, TransformerConfig
+from lm_builder.utils import change_state_dict_names
 
 class NewGELU(nn.Module):
     def forward(self, x):
