@@ -42,14 +42,15 @@ class GPT2(Transformer):
         model_state_dict = self.state_dict()
 
         # Naming conventions between gpt2 and this framework differ
-        name_changes = [
-            ("wpe.weight", "wpe.positional_embeddings"),
-            (".h.", ".blocks."),
-            ("attn.c_attn", "attn.qkv_proj"),
-            ("attn.c_proj", "attn.out_proj")]
+        name_changes = [(".h.", ".blocks."),
+                        ("attn.c_attn", "attn.qkv_proj"),
+                        ("attn.c_proj", "attn.out_proj")]
         # GPT2 used convolutions instead of linear modules so these weights won't match
         # our linear layer weights, instead we have to transpose them.
-        to_transpose = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
+        to_transpose = ["attn.c_attn.weight",
+                        "attn.c_proj.weight",
+                        "mlp.c_fc.weight",
+                        "mlp.c_proj.weight"]
         
         # The language model head is used to convert from embedding dimension to vocab size, notice
         # how this is the same as the token embedding linear layer but backwards so we can just use
@@ -99,5 +100,5 @@ def main():
 
     gpt2_xl.prompt("Claude Shannon, the")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -29,6 +29,10 @@ class MultiHeadAttention(nn.Module, Attention):
         if self.with_kv_cache:
             self.kv_cache = KVCache(self.context_len)
         
+        self.has_positional_embedding = (config.positional_embedding is not None)
+        if self.has_positional_embedding:
+            self.wpe = config.positional_embedding(self.context_len, self.embedding_dim)
+        
         self.has_flash_attn = hasattr(F, 'scaled_dot_product_attention')
         
         if with_mask:
@@ -91,6 +95,9 @@ class MultiHeadAttention(nn.Module, Attention):
         # we get the q, k, v projection of each embedding, each
         # matrix will have dimension (B, T, C)
         q, k, v = self.get_qkv(x)
+        if self.has_positional_embedding:
+            q = self.wpe(q)
+            k = self.wpe(k)
 
         # next we split the projected embeddings across the number
         # of heads we have, allowing each head to gain a different

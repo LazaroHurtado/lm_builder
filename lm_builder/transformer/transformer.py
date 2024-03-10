@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .block import Block
-from .transformer_config import TransformerConfig
+from .config import TransformerConfig
 
 class Transformer(nn.Module):
     def __init__(self, config: TransformerConfig):
@@ -16,13 +16,17 @@ class Transformer(nn.Module):
             config.attention(config.attention_config),
             config.ffn(config.ffn_config))
             for _ in range(config.num_layers)]
-        self.transformer = nn.ModuleDict(dict(
+        
+        transformer_modules = dict(
             wte = config.token_embedding(config.vocab_size, self.embedding_dim),
-            wpe = config.positional_embedding(self.context_length, self.embedding_dim),
             blocks = nn.ModuleList(blocks),
             dropout = nn.Dropout(config.dropout),
             ln_f = nn.LayerNorm(self.embedding_dim)
-        ))
+        )
+        if config.positional_embedding is not None:
+            transformer_modules["wpe"] = config.positional_embedding(self.context_length, self.embedding_dim)
+
+        self.transformer = nn.ModuleDict(transformer_modules)
         # In reality this is just the wte weights but transposed so we can map
         # from embedding to vocabulary
         self.lm_head = nn.Linear(self.embedding_dim, config.vocab_size)
@@ -33,12 +37,13 @@ class Transformer(nn.Module):
         _, T = x.size()
         assert T <= self.context_length
         
-        pos = torch.arange(0, T, dtype=torch.long).unsqueeze(0)
+        # Token embedding layer
+        x = self.transformer.wte(x) # (B, T, C)
+        if "wpe" in self.transformer:
+            # Positional embedding layer
+            x = self.transformer.wpe(x) # (1, T, C)
         
-        token_embeddings = self.transformer.wte(x) # (B, T, C)
-        pos_embeddings = self.transformer.wpe(pos) # (1, T, C)
-        
-        x = self.transformer.dropout(token_embeddings+pos_embeddings) # (B, T, C)
+        x = self.transformer.dropout(x) # (B, T, C)
         
         for block in self.transformer.blocks:
             x = block(x)

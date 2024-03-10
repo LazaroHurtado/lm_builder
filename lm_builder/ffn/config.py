@@ -26,6 +26,10 @@ class FeedForwardConfig():
             elif "ffn_config" in config:
                 config = config["ffn_config"]
             
-            config = module_has_attr(config, "activation_fn", nn)
-            
-            return FeedForwardConfig(**config)
+            return FeedForwardConfig.build_config(config)
+    
+    @staticmethod
+    def build_config(config: dict) -> FeedForwardConfig:
+        config = module_has_attr(config, "activation_fn", nn)
+        
+        return FeedForwardConfig(**config)

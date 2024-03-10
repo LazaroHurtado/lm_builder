@@ -1,2 +1,5 @@
 __pycache__/
 lm_builder_venv/
+
+*.egg-info
+build

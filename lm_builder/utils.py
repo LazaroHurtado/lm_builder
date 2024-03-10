@@ -8,7 +8,8 @@ def module_has_attr(config, key, primary_module, fallback_module=None):
             config[key] = getattr(primary_module, config[key])
         elif (fallback_module is not None) and hasattr(fallback_module, config[key]):
             config[key] = getattr(fallback_module, config[key])
-    
+        else:
+            raise AttributeError(f"Attribute not found {config[key]}")
     return config
 
 def change_state_dict_names(state_dict, original_state_dict, name_changes, to_transpose=[]):
