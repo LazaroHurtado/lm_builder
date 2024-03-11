@@ -14,7 +14,7 @@ You can then exit out of the venv with `deactivate`. For more make commands plea
 - Add tests 😬
 - Attention
     - ~~multi-headed attention~~
-    - grouped-query attention
+    - ~~grouped-query attention~~
     - sliding window attention
 - Caching
     - ~~kv cache~~
@@ -23,7 +23,7 @@ You can then exit out of the venv with `deactivate`. For more make commands plea
 - ~~Mixture of experts~~ (to be verified)
 - Positional embedding
     - ~~absolute p.e.~~
-    - rotary p.e.
+    - ~~rotary p.e.~~
 - Examples
     - ~~gpt2~~
     - llama 1/2

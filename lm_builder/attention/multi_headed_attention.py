@@ -12,7 +12,7 @@ from torch.nn import functional as F
 
 class MultiHeadAttention(nn.Module, Attention):
 
-    def __init__(self, config: AttentionConfig, with_mask=True):
+    def __init__(self, config: AttentionConfig):
         super().__init__()
         assert config.embedding_dimension % config.num_heads == 0
         
@@ -20,6 +20,8 @@ class MultiHeadAttention(nn.Module, Attention):
         self.embedding_dim = config.embedding_dimension
         self.num_heads = config.num_heads
         self.with_kv_cache = config.with_kv_cache
+
+        self.head_dim = self.embedding_dim // self.num_heads
         
         self.qkv_proj = nn.Linear(self.embedding_dim, 3*self.embedding_dim)
         self.out_proj = nn.Linear(self.embedding_dim, self.embedding_dim)
@@ -35,16 +37,13 @@ class MultiHeadAttention(nn.Module, Attention):
         
         self.has_flash_attn = hasattr(F, 'scaled_dot_product_attention')
         
-        if with_mask:
-            self.register_buffer(
-                "attention_mask",
-                torch.ones(self.context_len, self.context_len)
-                    .view(1, 1, self.context_len, self.context_len),
-                persistent=False)
+        self.register_buffer("attention_mask",
+                             torch.ones(self.context_len, self.context_len)[None, None, :, :],
+                             persistent=False)
 
         self._config = config
     
-    def get_qkv(self, x):
+    def get_qkv(self, x: torch.Tensor):
         # x has dimensionality of (batch_size, sequence_length, embedding_dim).
         # (B, T, C) -> (B, T, 3*C)
         qkv = self.qkv_proj(x)
@@ -57,12 +56,31 @@ class MultiHeadAttention(nn.Module, Attention):
 
         return q, k, v
 
-    def attention(self, query, key, value):
-        T = query.size(dim=2)
+    def get_heads(self,
+                  query: torch.Tensor,
+                  key: torch.Tensor,
+                  value: torch.Tensor):
+        B, T, _ = query.size()
+
+        # For the key and value matrices we might have hit the KV-Cache, so
+        # its sequence length might not be T which is why we do `.size(dim=1)`
+        # (B, T, C) -> (B, T, num_head, head_dim) -> (B, num_heads, T, head_dim)
+        q_heads = query.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+        k_heads = key.view(B, key.size(dim=1), self.num_heads, self.head_dim).transpose(1, 2)
+        v_heads = value.view(B, value.size(dim=1), self.num_heads, self.head_dim).transpose(1, 2)
+
+        return q_heads, k_heads, v_heads
+
+    def attention(self,
+                  query: torch.Tensor,
+                  key: torch.Tensor,
+                  value: torch.Tensor):
+        B, T, _ = query.size()
         
-        # (B, num_heads, T, head_size) x (B, num_heads, head_size, T) -> (B, num_heads, T, T)
+        # (B, num_heads, T, head_dim) @ (B, num_heads, head_dim, T) -> (B, num_heads, T, T)
         scale = (1.0 / math.sqrt(key.size(dim=-1)))
         attn = (query @ key.transpose(-2, -1)) * scale
+        attn = attn.view(B, self.num_heads, T, T)
         
         # Apply mask to Q@K^T matrix. Where the mask is equal
         # to zero we will replace the matrix's element at
@@ -73,7 +91,7 @@ class MultiHeadAttention(nn.Module, Attention):
         
         attn = self.attn_dropout(attn)
         
-        # (B, num_heads, T, T) x (B, num_heads, T, head_size) -> (B, num_heads, T, head_size)
+        # (B, num_heads, T, T) x (B, num_heads, T, head_dim) -> (B, num_heads, T, head_dim)
         return attn @ value
     
     def forward(self, x):
@@ -102,11 +120,8 @@ class MultiHeadAttention(nn.Module, Attention):
         # next we split the projected embeddings across the number
         # of heads we have, allowing each head to gain a different
         # interpretation.
-        # (B, num_heads, T, head_size)
-        head_size = C // self.num_heads
-        q = q.view(B, T, self.num_heads, head_size).transpose(1, 2)
-        k = k.view(B, k.size(dim=1), self.num_heads, head_size).transpose(1, 2)
-        v = v.view(B, v.size(dim=1), self.num_heads, head_size).transpose(1, 2)
+        # (B, num_heads, T, head_dim)
+        q, k, v = self.get_heads(q, k, v)
         
         if self.has_flash_attn:
             attn = F.scaled_dot_product_attention(
@@ -117,8 +132,8 @@ class MultiHeadAttention(nn.Module, Attention):
             attn = self.attention(q, k, v)
         
         # Convert multi-headed shaped matrix back to original shape
-        # (B, num_heads, T, head_size)  -> (B, T, num_heads, head_size)
-        # -> (B*T*num_heads*head_size)  -> (B, T, C)
+        # (B, num_heads, T, head_dim)  -> (B, T, num_heads, head_dim)
+        # -> (B*T*num_heads*head_dim)  -> (B, T, C)
         attn = attn.transpose(1, 2).contiguous().view(B, T, C)
         
         out = self.out_proj(attn)

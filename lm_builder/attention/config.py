@@ -14,6 +14,7 @@ class AttentionConfig():
     context_length: int
     embedding_dimension: int
     num_heads: int
+    kv_heads: Optional[int] = 1
     with_kv_cache: Optional[bool] = False
     attn_dropout: Optional[float] = 0.0
     resid_dropout: Optional[float] = 0.0

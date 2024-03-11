@@ -34,9 +34,9 @@ class GPT2FeedForward(nn.Module):
         return x
 
 class GPT2(Transformer):
-    def __init__(self, config: TransformerConfig, device="cpu"):
+    def __init__(self, config: TransformerConfig, device=None):
         super().__init__(config)
-        self.device = device
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     
     def load_from_state_dict(self, original_state_dict):
         model_state_dict = self.state_dict()
@@ -68,7 +68,7 @@ class GPT2(Transformer):
         enc = tiktoken.encoding_for_model("gpt2")
         
         input_ids = enc.encode(prompt)
-        input_ids = torch.tensor(input_ids, dtype=torch.long).unsqueeze(0)
+        input_ids = torch.tensor(input_ids, dtype=torch.long, device=self.device).unsqueeze(0)
 
         start = time.monotonic()
         output = self.generate(input_ids, max_new_tokens=20, temperature=0.4)

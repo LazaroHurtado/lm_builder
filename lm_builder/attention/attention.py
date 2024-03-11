@@ -1,3 +1,4 @@
+import torch
 
 from abc import abstractmethod
 from .config import AttentionConfig
@@ -12,4 +13,16 @@ class Attention():
         return
 
     @abstractmethod
-    def attn_mask(cls): ...
+    def get_qkv(self, x: torch.Tensor): ...
+
+    @abstractmethod
+    def get_heads(self,
+                  query: torch.Tensor,
+                  key: torch.Tensor,
+                  value: torch.Tensor): ...
+
+    @abstractmethod
+    def attention(self,
+                  query: torch.Tensor,
+                  key: torch.Tensor,
+                  value: torch.Tensor): ...
