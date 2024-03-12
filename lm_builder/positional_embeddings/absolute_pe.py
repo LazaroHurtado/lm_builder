@@ -5,7 +5,7 @@ class AbsolutePE(nn.Module):
     # For absolute positional embedding, half of the embeddings comes from a
     # sin wave and the other half comes from a cos wave.
     
-    def __init__(self, context_length: int = 1024, embedding_dim: int = 512):
+    def __init__(self, context_length: int, embedding_dim: int, inv_freq: float):
         super().__init__()
 
         if embedding_dim % 2 != 0:
@@ -13,7 +13,8 @@ class AbsolutePE(nn.Module):
 
         self.embedding_dim = embedding_dim
         self.context_length = context_length
-        
+
+        self.register_buffer("inv_freq", torch.tensor(inv_freq))
         self.register_buffer("weight", self._generate_positional_embeddings())
 
     def _generate_positional_embeddings(self):
@@ -27,7 +28,7 @@ class AbsolutePE(nn.Module):
         # This is the scale used in the paper, 1/(10_000**(2i/d_model)) where i is the
         # dimension of the embedding
         # (1, C/2)
-        scale = 1 / (10_000**power).unsqueeze(0)
+        scale = 1 / (self.inv_freq**power).unsqueeze(0)
         
 
         # The next step is to multiply the position by the scaling factor, pos/10_000**(2i/d_model)

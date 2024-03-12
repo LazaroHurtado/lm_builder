@@ -12,19 +12,16 @@ class Transformer(nn.Module):
         self.embedding_dim = config.attention_config.embedding_dimension
         self.context_length  = config.attention_config.context_length
         
-        blocks = [Block(
-            config.attention(config.attention_config),
-            config.ffn(config.ffn_config))
-            for _ in range(config.num_layers)]
+        blocks = [Block(config) for _ in range(config.num_layers)]
         
         transformer_modules = dict(
             wte = config.token_embedding(config.vocab_size, self.embedding_dim),
             blocks = nn.ModuleList(blocks),
             dropout = nn.Dropout(config.dropout),
-            ln_f = nn.LayerNorm(self.embedding_dim)
+            norm = nn.LayerNorm(self.embedding_dim)
         )
         if config.positional_embedding is not None:
-            transformer_modules["wpe"] = config.positional_embedding(self.context_length, self.embedding_dim)
+            transformer_modules["wpe"] = config.positional_embedding(self.context_length, self.embedding_dim, config.inv_freq)
 
         self.transformer = nn.ModuleDict(transformer_modules)
         # In reality this is just the wte weights but transposed so we can map
@@ -47,7 +44,7 @@ class Transformer(nn.Module):
         
         for block in self.transformer.blocks:
             x = block(x)
-        x = self.transformer.ln_f(x)
+        x = self.transformer.norm(x)
         # (B, T, C) -> (B, T, V)
         logits = self.lm_head(x)
         

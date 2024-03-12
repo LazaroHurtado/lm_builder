@@ -13,14 +13,17 @@ from typing import Optional
 
 @dataclass
 class TransformerConfig():
+    attention: attention.Attention
     attention_config: attention.AttentionConfig
+    ffn: ffn.FeedForward
     ffn_config: ffn.FeedForwardConfig
     vocab_size: int
     num_layers: int
-    attention: Optional[attention.Attention] = None
-    ffn: Optional[ffn.FeedForward] = None
-    token_embedding: Optional[nn.Module] = None
+    attn_norm: nn.Module
+    mlp_norm: nn.Module
+    token_embedding: nn.Module
     positional_embedding: Optional[nn.Module] = None
+    inv_freq: Optional[float] = 10_000.0
     dropout: Optional[float] = 0.0
     top_k: Optional[int] = 2
 
@@ -34,18 +37,20 @@ class TransformerConfig():
     @staticmethod
     def build_config(config: dict) -> TransformerConfig:
         config = module_has_attr(config, "attention",
-                                     primary_module=attention,
-                                     fallback_module=nn)
+                                 primary_module=attention,
+                                 fallback_module=nn)
             
         config = module_has_attr(config, "ffn",
-                                primary_module=ffn,
-                                fallback_module=nn)
+                                 primary_module=ffn,
+                                 fallback_module=nn)
 
         config = module_has_attr(config, "positional_embedding",
-                                primary_module=positional_embeddings,
-                                fallback_module=nn)
+                                 primary_module=positional_embeddings,
+                                 fallback_module=nn)
         
         config = module_has_attr(config, "token_embedding", nn)
+        config = module_has_attr(config, "attn_norm", nn)
+        config = module_has_attr(config, "mlp_norm", nn)
         
         config["attention_config"] = attention.AttentionConfig.build_config(config["attention_config"])
         config["ffn_config"] = ffn.FeedForwardConfig.build_config(config["ffn_config"])

@@ -19,6 +19,7 @@ class AttentionConfig():
     attn_dropout: Optional[float] = 0.0
     resid_dropout: Optional[float] = 0.0
     positional_embedding: Optional[nn.Module] = None
+    inv_freq: Optional[float] = 10_000.0
 
     @staticmethod
     def from_yml(file: str) -> AttentionConfig:

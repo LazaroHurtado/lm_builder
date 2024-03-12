@@ -8,6 +8,9 @@ from lm_builder.ffn import FeedForwardConfig
 from lm_builder.transformer import Transformer, TransformerConfig
 from lm_builder.utils import change_state_dict_names
 
+MODEL_ARCH_FILE = "examples/gpt2_xl.yml"
+HF_MODEL_NAME = "gpt2-xl"
+
 class NewGELU(nn.Module):
     def forward(self, x):
         return 0.5 * x * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0))))
@@ -81,9 +84,7 @@ class GPT2(Transformer):
         print(f"Response time: {elapsed_time:.2f}s")
 
 def main():
-    yml_file = "examples/gpt2_xl.yml"
-    
-    transformer_config = TransformerConfig.from_yml(yml_file)
+    transformer_config = TransformerConfig.from_yml(MODEL_ARCH_FILE)
     transformer_config.ffn = GPT2FeedForward
     transformer_config.ffn.activation_fn = NewGELU()
     
@@ -91,7 +92,7 @@ def main():
 
     # Load gpt2-xl model from huggingface to get the state dict
     from transformers import GPT2LMHeadModel
-    model_hf = GPT2LMHeadModel.from_pretrained("gpt2-xl")
+    model_hf = GPT2LMHeadModel.from_pretrained(HF_MODEL_NAME)
     state_dict = model_hf.state_dict()
 
     # Load huggingface's state dict into our model

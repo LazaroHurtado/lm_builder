@@ -1,26 +1,22 @@
 import torch.nn as nn
 
-from ..attention.attention import Attention
-from ..ffn.feed_forward import FeedForward
+from .config import TransformerConfig
 
 class Block(nn.Module):
     
-    def __init__(self, attn_mechanism: Attention, ffn: FeedForward):
+    def __init__(self, config: TransformerConfig):
         super().__init__()
-        
-        self.attn_config = attn_mechanism.config
-        self.ffn_config = ffn.config
 
-        self.embedding_dim = self.attn_config.embedding_dimension
+        self.embedding_dim = config.attention_config.embedding_dimension
 
-        self.ln_1 = nn.LayerNorm(self.embedding_dim)
-        self.attn = attn_mechanism
+        self.attn_norm = config.attn_norm(self.embedding_dim)
+        self.attn = config.attention(config.attention_config)
         
-        self.ln_2 = nn.LayerNorm(self.embedding_dim)
-        self.mlp = ffn
+        self.mlp_norm = config.mlp_norm(self.embedding_dim)
+        self.mlp = config.ffn(config.ffn_config)
     
     def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
-        x = x + self.mlp(self.ln_2(x))
+        x = x + self.attn(self.attn_norm(x))
+        x = x + self.mlp(self.mlp_norm(x))
         
         return x

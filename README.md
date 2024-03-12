@@ -26,6 +26,6 @@ You can then exit out of the venv with `deactivate`. For more make commands plea
     - ~~rotary p.e.~~
 - Examples
     - ~~gpt2~~
-    - llama 1/2
+    - ~~llama 1/2~~
     - mistral
     - mixtral

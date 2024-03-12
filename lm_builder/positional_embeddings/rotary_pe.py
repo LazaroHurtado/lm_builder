@@ -5,7 +5,7 @@ class RotaryPE(nn.Module):
     # For rotary positional embedding, we take chunks of two from the
     # token embeddings and apply a rotation.
     
-    def __init__(self, context_length: int = 1024, embedding_dim: int = 512):
+    def __init__(self, context_length: int, embedding_dim: int, inv_freq: float):
         super().__init__()
 
         if embedding_dim % 2 != 0:
@@ -13,11 +13,13 @@ class RotaryPE(nn.Module):
 
         self.embedding_dim = embedding_dim
         self.context_length = context_length
+
+        self.register_buffer("inv_freq", torch.tensor(inv_freq))
         
         sin_pe, cos_pe = self._generate_positional_embeddings()
-        
-        self.register_buffer("sin_weight", sin_pe)
-        self.register_buffer("cos_weight", cos_pe)
+
+        self.register_buffer("sin_weight", sin_pe, persistent=False)
+        self.register_buffer("cos_weight", cos_pe, persistent=False)
 
     def _generate_positional_embeddings(self):
         # In the ReFormer paper, the positional embedding is applied to
@@ -31,7 +33,7 @@ class RotaryPE(nn.Module):
         # this theta to match the paper's notation
         # (1, C)
         power = (2*torch.arange(0, self.embedding_dim, step=2)) / self.embedding_dim
-        thetas = 1 / (10_000**power).repeat_interleave(2).unsqueeze(0)
+        thetas = 1 / (self.inv_freq**power).repeat_interleave(2).unsqueeze(0)
         
         # For each theta, we want to multiply it by the position of the token.
         # We call this m to match the paper's notation

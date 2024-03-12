@@ -12,6 +12,8 @@ ffn_config:
   dropout: 0.1
 token_embedding: Embedding
 positional_embedding: AbsolutePE
+attn_norm: LayerNorm
+mlp_norm: LayerNorm
 dropout: 0.1
 vocab_size: 50257
 num_layers: 48
