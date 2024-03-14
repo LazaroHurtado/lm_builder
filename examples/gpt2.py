@@ -52,9 +52,7 @@ class GPT2(Transformer):
         enc = tiktoken.encoding_for_model("gpt2")
 
         input_ids = enc.encode(prompt)
-        input_ids = torch.tensor(input_ids, dtype=torch.long, device=DEVICE).unsqueeze(
-            0
-        )
+        input_ids = torch.tensor(input_ids, dtype=torch.long, device=DEVICE).unsqueeze(0)
 
         start = time.monotonic()
         output = self.generate(input_ids, top_k=2, max_new_tokens=20, temperature=0.9)

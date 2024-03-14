@@ -24,9 +24,7 @@ class Llama2(Transformer):
         enc = AutoTokenizer.from_pretrained(HF_MODEL_NAME)
 
         input_ids = enc.encode(prompt)
-        input_ids = torch.tensor(input_ids, dtype=torch.long, device=DEVICE).unsqueeze(
-            0
-        )
+        input_ids = torch.tensor(input_ids, dtype=torch.long, device=DEVICE).unsqueeze(0)
 
         start = time.monotonic()
         output = self.generate(
