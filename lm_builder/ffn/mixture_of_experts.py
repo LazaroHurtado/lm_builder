@@ -1,42 +1,47 @@
 import torch
-import torch.nn as nn
 
 from .config import FeedForwardConfig
 from .feed_forward import FeedForward
+
+from torch import nn
+
 
 class MixtureOfExperts(nn.Module):
 
     def __init__(self, config: FeedForwardConfig):
         super().__init__()
-        
+
         self.embedding_dim = config.embedding_dimension
         self.intermediate_dim = config.intermediate_dimension
-        
+
         self.num_experts = config.num_experts
         self.top_k = config.top_k
 
         self.router = nn.Linear(self.embedding_dim, self.num_experts, bias=False)
-        self.experts = nn.ModuleList([FeedForward(config) for _ in range(self.num_experts)])
+        self.experts = nn.ModuleList(
+            [FeedForward(config) for _ in range(self.num_experts)]
+        )
 
         self.config = config
-    
+
     def forward(self, x):
         # A more intuitive approach for this logic can be applied using
         # traditional for-loops but we gain performance boosts when using
         # native Pytorch tensor ops.
-        # This logic comes from here: https://github.com/dzhulgakov/llama-mistral/blob/main/llama/model.py#L350
+        # This logic comes from here:
+        #   https://github.com/dzhulgakov/llama-mistral/blob/main/llama/model.py#L350
         # Comments and explanations are my own
 
         orig_shape = x.shape()
         # (B, T, C) -> (B*T, C)
         x = x.view(-1, self.embedding_dim)
-        
+
         # (B*T, C) -> (B*T, num_experts)
         routing_logits = self.router(x)
-        
+
         # (B*T, num_experts) -> (B*T, top_k)
         expert_logits, expert_indices = routing_logits.topk(self.top_k, dim=-1)
-        expert_probs = expert_logits.softmax(dim = -1)
+        expert_probs = expert_logits.softmax(dim=-1)
         expert_indices = expert_indices.view(-1)
 
         # Choosing the top K experts will gives us the logits and indices
@@ -67,7 +72,7 @@ class MixtureOfExperts(nn.Module):
             #   i = 2
             #   x[expert_indices == i] -> x[[1,2,3,4] == 2] -> x[1] -> 0.94
             out[expert_indices == i] = expert(x[expert_indices == i])
-        
+
         # (B*T*top_k, C) -> (B*T, top_k, C)
         out = out.view(*expert_probs.shape, -1)
         # (B*T, top_k) -> (B*T, top_k, 1)

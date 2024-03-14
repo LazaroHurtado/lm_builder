@@ -5,18 +5,11 @@ attention_config:
   embedding_dimension: 4096
   num_heads: 32
   kv_heads: 32
-  attn_dropout: 0.0
-  resid_dropout: 0.0
   with_kv_cache: True
 ffn: FeedForward
 ffn_config:
   embedding_dimension: 4096
   intermediate_dimension: 11008
   activation_fn: SiLU
-  dropout: 0.1
-token_embedding: Embedding
-attn_norm: LayerNorm
-mlp_norm: LayerNorm
-dropout: 0.1
 vocab_size: 32000
 num_layers: 32

@@ -1,25 +1,24 @@
 import torch
-import torch.nn as nn
+
+from einops import rearrange
+from torch import nn
+
 
 class RotaryPE(nn.Module):
     # For rotary positional embedding, we take chunks of two from the
     # token embeddings and apply a rotation.
-    
-    def __init__(self, context_length: int, embedding_dim: int, inv_freq: float):
+
+    def __init__(self, context_length: int, dim: int, freq: float):
         super().__init__()
 
-        if embedding_dim % 2 != 0:
-            embedding_dim += 1
+        if dim % 2 != 0:
+            dim += 1
 
-        self.embedding_dim = embedding_dim
+        self.dim = dim
         self.context_length = context_length
+        self.freq = freq
 
-        self.register_buffer("inv_freq", torch.tensor(inv_freq))
-        
-        sin_pe, cos_pe = self._generate_positional_embeddings()
-
-        self.register_buffer("sin_weight", sin_pe, persistent=False)
-        self.register_buffer("cos_weight", cos_pe, persistent=False)
+        self._generate_positional_embeddings()
 
     def _generate_positional_embeddings(self):
         # In the ReFormer paper, the positional embedding is applied to
@@ -27,53 +26,53 @@ class RotaryPE(nn.Module):
         # chunks of two from the token embeddings and applying a rotation
         # matrix
 
-        # Since we are taking chunks of two from the token embeddings, we
-        # build the thetas to be half the size of the embedding dimension
-        # and then repeat it twice to match the embedding dimension. We call
-        # this theta to match the paper's notation
-        # (1, C)
-        power = (2*torch.arange(0, self.embedding_dim, step=2)) / self.embedding_dim
-        thetas = 1 / (self.inv_freq**power).repeat_interleave(2).unsqueeze(0)
-        
-        # For each theta, we want to multiply it by the position of the token.
+        # In the ReFormer paper, each pair of dimensions in the embedding
+        # tensor is treated as a point on the complex plane, which is why
+        # we are stepping by 2. The paper also calls this the thetas but
+        # we will refer to it as the inverse frequency, inv_freq
+        # (C/2)
+        power = (2 * torch.arange(0, self.dim, step=2)) / self.dim
+        inv_freq = 1 / (self.freq**power)
+
+        # For each inv_freq, we want to multiply it by the position of the token.
         # We call this m to match the paper's notation
-        # (T, 1)
-        m = torch.arange(0, self.context_length).unsqueeze(-1)
-        
-        # (T, 1) * (1, C) -> (T, C)
-        wavelengths = m*thetas
+        # (T)
+        m = torch.arange(0, self.context_length)
 
-        # (1, T, C)
-        sin = torch.sin(wavelengths).unsqueeze(0)
-        cos = torch.cos(wavelengths).unsqueeze(0)
+        # (T) X (C/2) -> (T, C/2)
+        angles = torch.outer(m, inv_freq)
 
-        return (sin, cos)
+        # One way to represent a rotation is through Euler's formula, e^(i*theta),
+        # which is why we are using polar, so we can get a complex tensor of the form
+        # e^(i*m*inv_freq)
+        # (T, C/2)
+        rotations = torch.polar(torch.ones_like(angles), angles)
 
-    def interleave(self, x: torch.Tensor, shape: torch.Size):
-        return x.t().contiguous().view(*shape)
+        self.register_buffer("_rotations_cached", rotations, persistent=False)
 
     def forward(self, x: torch.Tensor):
-        _, T, C = x.size()
-        # Because we are applying a rotation using the sin and cos waves, we
-        # have to break x up into its even and negative odd pairs to make the
-        # computation easier. We do negative odd pairs because our sin tensor
-        # is all positive.
-        # Example:
-        #   Assume T=1 and C=4 and x is the following tensor
-        #   [[0.4, 0.2, 0.8, 0.3]]
-        #   recall that for RoPE we take chunks of two and then apply a rotation, so
-        #   the first rotation is:
-        #   cos(a), -sin(a),  @  0.4,  =  0.4cos(a) - 0.2sin(a)  = 0.4cos(a) - 0.2sin(a)
-        #   sin(a),  cos(a)      0.2      0.4sin(a) + 0.2cos(a)    0.2cos(a) + 0.4sin(a)
-        #   If we were to expand this to a larger input tensor, we would
-        #   see that cos(a) gets multiplied to all values in the tensor
-        #   and -sin(a) gets multiplied only to odd indices while sin(a) gets
-        #   multiplied only to even indices.
-        # (B, T, C/2)
-        neg_odds, pos_evens = -x[..., 1::2], x[..., ::2]
-        # (B, T, C/2) -> (2, B*T*C/2)
-        y = torch.stack([neg_odds.reshape(-1), pos_evens.reshape(-1)])
-        # (2, B*T*C/2) -> (B, T, C)
-        y = self.interleave(y, x.size())
+        T = x.size(dim=1)  # pylint: disable=invalid-name
+        C = x.size(dim=-1)  # pylint: disable=invalid-name
 
-        return x * self.cos_weight[:, :T, :C] + y * self.sin_weight[:, :T, :C]
+        # As previously mentioned, the paper represents each pair of dimensions
+        # as a point on the complex plane. Thus, we rearrange the tensor to get
+        # pairs of two.
+        # (B, T, num_heads, head_dim/2, 2)
+        x_pairs = rearrange(x, "... (head_dim r) -> ... head_dim r", r=2)
+
+        # Once we have the pairs we can convert them to a complex representation.
+        # Example:
+        #   Let x = [[1.2, 0.8], [0.2, 0.7]], then the complex representation would be
+        #   c = [1.2+0.8i, 0.2+0.7i]
+        # (B, T, num_heads, head_dim/2)
+        x_as_complex = torch.view_as_complex(x_pairs)
+
+        # We change the shape of our rotations tensor to match x
+        # (T, C/2) -> (1, T, C/2) -> (1, T, 1, C/2)
+        rotations = self._rotations_cached[:T, :C].unsqueeze(0).unsqueeze(2)
+
+        # (B, T, num_heads, head_dim/2) * (1, T, 1, C/2) -> (B, T, num_heads, head_dim/2, 2)
+        out = torch.view_as_real(x_as_complex * rotations)
+
+        # (B, T, num_heads, head_dim)
+        return out.flatten(3)

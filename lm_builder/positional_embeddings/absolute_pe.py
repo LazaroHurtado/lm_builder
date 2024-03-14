@@ -1,11 +1,13 @@
 import torch
-import torch.nn as nn
+
+from torch import nn
+
 
 class AbsolutePE(nn.Module):
     # For absolute positional embedding, half of the embeddings comes from a
     # sin wave and the other half comes from a cos wave.
-    
-    def __init__(self, context_length: int, embedding_dim: int, inv_freq: float):
+
+    def __init__(self, context_length: int, embedding_dim: int, freq: float):
         super().__init__()
 
         if embedding_dim % 2 != 0:
@@ -13,39 +15,40 @@ class AbsolutePE(nn.Module):
 
         self.embedding_dim = embedding_dim
         self.context_length = context_length
+        self.freq = freq
 
-        self.register_buffer("inv_freq", torch.tensor(inv_freq))
-        self.register_buffer("weight", self._generate_positional_embeddings())
+        self._generate_positional_embeddings()
 
     def _generate_positional_embeddings(self):
         # In the Attention Is All You Need paper, the positional embedding table
         # is generated using sine for even index positions and cosine for odd positions.
-        
+
         # We step by 2 so we can generate the sin and cos, which each takes half the
         # total embedding dimension, waves separately and then stack them together.
-        power = (2*torch.arange(0, self.embedding_dim, step=2)) / self.embedding_dim
-        
+        power = (2 * torch.arange(0, self.embedding_dim, step=2)) / self.embedding_dim
+
         # This is the scale used in the paper, 1/(10_000**(2i/d_model)) where i is the
         # dimension of the embedding
-        # (1, C/2)
-        scale = 1 / (self.inv_freq**power).unsqueeze(0)
-        
+        # (C/2)
+        inv_freq = 1 / (self.freq**power)
 
         # The next step is to multiply the position by the scaling factor, pos/10_000**(2i/d_model)
-        # (T, 1) * (1, C/2) -> (T, C/2)
-        pos = torch.arange(0, self.context_length).unsqueeze(-1)
-        wavelength = pos*scale
+        # (T) X (C/2) -> (T, C/2)
+        pos = torch.arange(0, self.context_length)
+        angles = torch.outer(pos, inv_freq)
 
         # This will give us abosolute positional embedding for each position
         # and dimension of the embedding as described in the paper.
         # (T, C/2) -> (T*C/2)
-        sin = torch.sin(wavelength).view(-1)
-        cos = torch.cos(wavelength).view(-1)
-        
+        sin = angles.sin().view(-1)
+        cos = angles.cos().view(-1)
+
         # (2, T*C/2)
         sinusoids = torch.stack((sin, cos))
-        # (1, T, C)
-        return self.interleave(sinusoids, (1, self.context_length, self.embedding_dim))
+        # (T, C)
+        pos_embs = self.interleave(sinusoids, (self.context_length, self.embedding_dim))
+
+        self.register_buffer("_pos_embs_cached", pos_embs)
 
     def interleave(self, x: torch.Tensor, shape: torch.Size):
         # I will explain this through an example:
@@ -70,5 +73,7 @@ class AbsolutePE(nn.Module):
         return x.t().contiguous().view(*shape)
 
     def forward(self, x: torch.Tensor):
-        _, T, C = x.size()
-        return x + self.weight[:, :T, :C]
+        T = x.size(dim=-2)  # pylint: disable=invalid-name
+        C = x.size(dim=-1)  # pylint: disable=invalid-name
+
+        return x + self._pos_embs_cached[:T, :C]

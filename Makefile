@@ -4,12 +4,12 @@
 VENV_NAME = "lm_builder_venv"
 
 setup: create_venv
+	@echo "Install the required packages with: `pip install -e .`"
 	@echo "Activate the venv with: \`source ./$(VENV_NAME)/bin/activate\`"
 
 create_venv:
 	python3 -m venv ./$(VENV_NAME) ;\
-	source ./$(VENV_NAME)/bin/activate ;\
-	pip3 install -q -r requirements.txt
+	source ./$(VENV_NAME)/bin/activate
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
