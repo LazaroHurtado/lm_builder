@@ -7,10 +7,12 @@ attention_config:
   resid_dropout: 0.1
   with_kv_cache: True
   bias: True
+ffn: ClassicFeedForward
 ffn_config:
   embedding_dimension: 1600
   intermediate_dimension: 6400
   dropout: 0.1
+  activation_fn: GELU
   bias: True
 positional_embedding: AbsolutePE
 dropout: 0.1

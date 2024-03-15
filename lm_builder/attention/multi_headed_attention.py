@@ -67,7 +67,7 @@ class MultiHeadAttention(nn.Module, Attention):
 
         # For the key and value matrices we might have hit the KV-Cache, so
         # its sequence length might not be T which is why we do `.size(dim=1)`
-        # (B, T, C) -> (B, T, num_head, head_dim) -> (B, num_heads, T, head_dim)
+        # (B, T, C) -> (B, T, num_head, head_dim)
         q_heads = query.view(B, T, self.num_heads, self.head_dim)
         k_heads = key.view(B, key.size(dim=1), self.num_heads, self.head_dim)
         v_heads = value.view(B, value.size(dim=1), self.num_heads, self.head_dim)
@@ -114,18 +114,19 @@ class MultiHeadAttention(nn.Module, Attention):
         # matrix will have dimension (B, T, C)
         q, k, v = self.get_qkv(x)
 
-        if self.with_kv_cache and not self.training:
-            k, v = self.kv_cache.update(k, v)
-
         # next we split the projected embeddings across the number
         # of heads we have, allowing each head to gain a different
         # interpretation.
-        # (B, num_heads, T, head_dim)
+        # (B, T, num_heads, head_dim)
         q, k, v = self.get_heads(q, k, v)
         if self.has_positional_embedding:
             q = self.pos_emb(q)
             k = self.pos_emb(k)
+        
+        if self.with_kv_cache and not self.training:
+            k, v = self.kv_cache.update(k, v)
 
+        # (B, num_heads, T, head_dim)
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)

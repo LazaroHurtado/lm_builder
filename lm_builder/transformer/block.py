@@ -13,11 +13,11 @@ class Block(nn.Module):
         self.attn_norm = config.attn_norm(self.embedding_dim, bias=config.norm_bias)
         self.attn = config.attention(config.attention_config)
 
-        self.mlp_norm = config.mlp_norm(self.embedding_dim, bias=config.norm_bias)
-        self.mlp = config.ffn(config.ffn_config)
+        self.ffn_norm = config.ffn_norm(self.embedding_dim, bias=config.norm_bias)
+        self.ffn = config.ffn(config.ffn_config)
 
     def forward(self, x):
         x = x + self.attn(self.attn_norm(x))
-        x = x + self.mlp(self.mlp_norm(x))
+        x = x + self.ffn(self.ffn_norm(x))
 
         return x

@@ -11,5 +11,8 @@ ffn_config:
   embedding_dimension: 4096
   intermediate_dimension: 11008
   activation_fn: SiLU
+norm: RMSNorm
+ffn_norm: RMSNorm
+attn_norm: RMSNorm
 vocab_size: 32000
 num_layers: 32

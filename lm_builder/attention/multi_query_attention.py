@@ -41,10 +41,10 @@ class MultiQueryAttention(CausalMultiHeadAttention):
         # sequences. During inference, we can see up to 7x speedup.
 
         B, T, _ = query.size()  # pylint: disable=invalid-name
-        # (B, T, C) -> (B, T, num_head, head_dim) -> (B, num_heads, T, head_dim)
+        # (B, T, C) -> (B, T, num_head, head_dim)
         q_heads = query.view(B, T, self.num_heads, self.head_dim)
 
-        # (B, T, head_dim) -> (B, T, 1, head_dim) -> (B, 1, T, head_dim)
+        # (B, T, head_dim) -> (B, T, 1, head_dim)
         k_heads = key.view(B, key.size(dim=1), self.kv_heads, self.head_dim)
         v_heads = value.view(B, value.size(dim=1), self.kv_heads, self.head_dim)
 

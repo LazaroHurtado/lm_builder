@@ -14,7 +14,7 @@ class KVCache:
             self.k = k
             self.v = v
         else:
-            self.k = torch.cat((self.k, k), dim=1)[:, -self.context_length :, :]
-            self.v = torch.cat((self.v, v), dim=1)[:, -self.context_length :, :]
+            self.k = torch.cat((self.k, k), dim=1)[:, -self.context_length :, :, :]
+            self.v = torch.cat((self.v, v), dim=1)[:, -self.context_length :, :, :]
 
         return self.k, self.v

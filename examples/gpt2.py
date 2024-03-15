@@ -1,14 +1,10 @@
-import math
-import time
 import tiktoken
-import torch
 import gc
 
-from lm_builder.ffn import FeedForwardConfig
-from lm_builder.transformer import Transformer, TransformerConfig
+from lm_builder import LanguageModel
+from lm_builder.transformer import TransformerConfig
 from lm_builder.utils import change_state_dict_names
 
-from torch import nn
 from transformers import GPT2LMHeadModel
 
 # Consider changing this to "cuda" for Nvidia GPUs or "mps" for Apple Metal GPUs
@@ -16,61 +12,17 @@ DEVICE = "cpu"
 MODEL_ARCH_FILE = "examples/gpt2_xl.yml"
 HF_MODEL_NAME = "gpt2-xl"
 
-
-class NewGELU(nn.Module):
-    def forward(self, x):
-        c = math.sqrt(2.0 / math.pi)
-        x_cubed = torch.pow(x, 3.0)
-
-        return 0.5 * x * (1.0 + torch.tanh(c * (x + 0.044715 * x_cubed)))
-
-
-class GPT2FeedForward(nn.Module):
-    def __init__(self, config: FeedForwardConfig):
-        super().__init__()
-
-        self.in_dim = config.embedding_dimension
-        self.hidden_dim = config.intermediate_dimension
-
-        self.c_fc = nn.Linear(self.in_dim, self.hidden_dim)
-        self.activation_fn = config.activation_fn
-        self.c_proj = nn.Linear(self.hidden_dim, self.in_dim)
-        self.dropout = nn.Dropout(config.dropout)
-
-        self.config = config
-
-    def forward(self, x):
-        x = self.c_fc(x)
-        x = self.activation_fn(x)
-        x = self.c_proj(x)
-        x = self.dropout(x)
-        return x
-
-
-class GPT2(Transformer):
-    def prompt(self, prompt):
-        enc = tiktoken.encoding_for_model("gpt2")
-
-        input_ids = enc.encode(prompt)
-        input_ids = torch.tensor(input_ids, dtype=torch.long, device=DEVICE).unsqueeze(0)
-
-        start = time.monotonic()
-        output = self.generate(input_ids, top_k=2, max_new_tokens=20, temperature=0.9)
-        end = time.monotonic()
-
-        output = enc.decode(output.flatten().tolist())
-        elapsed_time = end - start
-
-        print(f"Output: {output}")
-        print(f"Response time: {elapsed_time:.2f}s")
+CONFIG = TransformerConfig.from_yml(MODEL_ARCH_FILE)
 
 
 def load_from_state_dict(original_state_dict):
     # Naming conventions between gpt2 and this framework differ
     name_changes = [
         (".h.", ".blocks."),
+        ("mlp.c_fc", "ffn.up_proj"),
+        ("mlp.c_proj", "ffn.down_proj"),
         ("ln_1.", "attn_norm."),
-        ("ln_2.", "mlp_norm."),
+        ("ln_2.", "ffn_norm."),
         ("ln_f.", "norm."),
         ("wpe.weight", "wpe._pos_embs_cached"),
         ("attn.c_attn", "attn.qkv_proj"),
@@ -107,17 +59,17 @@ def main():
     del state_dict
     gc.collect()
 
-    transformer_config = TransformerConfig.from_yml(MODEL_ARCH_FILE)
-    transformer_config.ffn = GPT2FeedForward
-    transformer_config.ffn.activation_fn = NewGELU()
+    tokenizer = tiktoken.encoding_for_model("gpt2")
+    gpt2_xl = LanguageModel(CONFIG, tokenizer, device=DEVICE)
 
-    gpt2_xl = GPT2(transformer_config)
     gpt2_xl.load_state_dict(gpt2_xl.state_dict() | new_state_dict)
+    del new_state_dict
+    gc.collect()
 
     gpt2_xl.to(DEVICE)
     gpt2_xl.eval()
 
-    gpt2_xl.prompt("Claude Shannon, the")
+    gpt2_xl.prompt("Claude Shannon, the", top_k=2, max_new_tokens=20, temperature=0.9)
 
 
 if __name__ == "__main__":

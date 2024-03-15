@@ -4,6 +4,7 @@ import yaml
 
 from .. import attention
 from .. import ffn
+from .. import normalizers
 from .. import positional_embeddings
 from ..utils import module_has_attr
 
@@ -22,7 +23,7 @@ class TransformerConfig:
     ffn: Optional[ffn.FeedForward] = None
     norm: nn.Module = nn.LayerNorm
     attn_norm: nn.Module = nn.LayerNorm
-    mlp_norm: nn.Module = nn.LayerNorm
+    ffn_norm: nn.Module = nn.LayerNorm
     token_embedding: nn.Module = nn.Embedding
     positional_embedding: Optional[nn.Module] = None
     pos_emb_freq: float = 10_000.0
@@ -54,9 +55,18 @@ class TransformerConfig:
         )
 
         config = module_has_attr(config, "token_embedding", nn)
-        config = module_has_attr(config, "norm", nn)
-        config = module_has_attr(config, "attn_norm", nn)
-        config = module_has_attr(config, "mlp_norm", nn)
+        config = module_has_attr(
+            config, "norm", primary_module=normalizers, fallback_module=nn
+        )
+        config = module_has_attr(
+            config,
+            "attn_norm",
+            primary_module=normalizers,
+            fallback_module=nn,
+        )
+        config = module_has_attr(
+            config, "ffn_norm", primary_module=normalizers, fallback_module=nn
+        )
 
         config["attention_config"] = attention.AttentionConfig.build_config(
             config["attention_config"]
