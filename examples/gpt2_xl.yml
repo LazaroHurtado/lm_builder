@@ -5,7 +5,8 @@ attention_config:
   num_heads: 25
   attn_dropout: 0.1
   resid_dropout: 0.1
-  with_kv_cache: True
+  bias: True
+ffn: FeedForward
 ffn_config:
   embedding_dimension: 1600
   intermediate_dimension: 6400
@@ -14,6 +15,8 @@ token_embedding: Embedding
 positional_embedding: AbsolutePE
 attn_norm: LayerNorm
 mlp_norm: LayerNorm
+transformer_norm: LayerNorm
+bias: True
 dropout: 0.1
 vocab_size: 50257
 num_layers: 48

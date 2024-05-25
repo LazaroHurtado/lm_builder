@@ -18,7 +18,7 @@ class Transformer(nn.Module):
             wte = config.token_embedding(config.vocab_size, self.embedding_dim),
             blocks = nn.ModuleList(blocks),
             dropout = nn.Dropout(config.dropout),
-            norm = nn.LayerNorm(self.embedding_dim)
+            norm = config.transformer_norm(self.embedding_dim, bias=config.bias)
         )
         if config.positional_embedding is not None:
             transformer_modules["wpe"] = config.positional_embedding(self.context_length, self.embedding_dim, config.inv_freq)
@@ -26,7 +26,7 @@ class Transformer(nn.Module):
         self.transformer = nn.ModuleDict(transformer_modules)
         # In reality this is just the wte weights but transposed so we can map
         # from embedding to vocabulary
-        self.lm_head = nn.Linear(self.embedding_dim, config.vocab_size)
+        self.lm_head = nn.Linear(self.embedding_dim, config.vocab_size, bias=False)
 
         self.config = config
     
@@ -56,8 +56,12 @@ class Transformer(nn.Module):
         
         return logits, loss
 
-    @torch.no_grad()
-    def generate(self, input_ids, max_new_tokens, temperature=1.0):
+    @torch.inference_mode()
+    def generate(self,
+                 input_ids: torch.Tensor,
+                 output_only: bool = False,
+                 max_new_tokens: int =20,
+                 temperature: float = 1.0):
         
         for _ in range(max_new_tokens):
             input_context_length = input_ids.shape[-1]
@@ -76,4 +80,6 @@ class Transformer(nn.Module):
             
             input_ids = torch.cat((input_ids, next_id), dim=1)
         
+        if output_only:
+            return input_ids[:, -max_new_tokens:]
         return input_ids

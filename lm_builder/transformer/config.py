@@ -19,9 +19,11 @@ class TransformerConfig():
     ffn_config: ffn.FeedForwardConfig
     vocab_size: int
     num_layers: int
-    attn_norm: nn.Module
-    mlp_norm: nn.Module
     token_embedding: nn.Module
+    bias: bool = False
+    attn_norm: Optional[nn.Module] = None
+    mlp_norm: Optional[nn.Module] = None
+    transformer_norm: Optional[nn.Module] = None
     positional_embedding: Optional[nn.Module] = None
     inv_freq: Optional[float] = 10_000.0
     dropout: Optional[float] = 0.0
@@ -49,6 +51,7 @@ class TransformerConfig():
                                  fallback_module=nn)
         
         config = module_has_attr(config, "token_embedding", nn)
+        config = module_has_attr(config, "transformer_norm", nn)
         config = module_has_attr(config, "attn_norm", nn)
         config = module_has_attr(config, "mlp_norm", nn)
         

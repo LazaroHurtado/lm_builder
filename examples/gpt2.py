@@ -1,15 +1,18 @@
 import math
 import time
-import tiktoken
 import torch
 import torch.nn as nn
+import gc
 
 from lm_builder.ffn import FeedForwardConfig
 from lm_builder.transformer import Transformer, TransformerConfig
 from lm_builder.utils import change_state_dict_names
 
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+DEVICE = "cpu"
 MODEL_ARCH_FILE = "examples/gpt2_xl.yml"
-HF_MODEL_NAME = "gpt2-xl"
+HF_MODEL_NAME = "openai-community/gpt2-xl"
 
 class NewGELU(nn.Module):
     def forward(self, x):
@@ -37,66 +40,65 @@ class GPT2FeedForward(nn.Module):
         return x
 
 class GPT2(Transformer):
-    def __init__(self, config: TransformerConfig, device=None):
+    def __init__(self, config: TransformerConfig):
         super().__init__(config)
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    
-    def load_from_state_dict(self, original_state_dict):
-        model_state_dict = self.state_dict()
-
-        # Naming conventions between gpt2 and this framework differ
-        name_changes = [(".h.", ".blocks."),
-                        ("attn.c_attn", "attn.qkv_proj"),
-                        ("attn.c_proj", "attn.out_proj")]
-        # GPT2 used convolutions instead of linear modules so these weights won't match
-        # our linear layer weights, instead we have to transpose them.
-        to_transpose = ["attn.c_attn.weight",
-                        "attn.c_proj.weight",
-                        "mlp.c_fc.weight",
-                        "mlp.c_proj.weight"]
-        
-        # The language model head is used to convert from embedding dimension to vocab size, notice
-        # how this is the same as the token embedding linear layer but backwards so we can just use
-        # the same weights but transposed incase our model doesnt come with it.
-        if "lm_head.weight" not in original_state_dict:
-            original_state_dict["lm_head.weight"] = original_state_dict["transformer.wte.weight"]
-
-        self.state_dict = change_state_dict_names(model_state_dict,
-                                                  original_state_dict,
-                                                  name_changes, 
-                                                  to_transpose)
-        self.to(self.device)
+        self.tokenizer = AutoTokenizer.from_pretrained(HF_MODEL_NAME)
     
     def prompt(self, prompt):
-        enc = tiktoken.encoding_for_model("gpt2")
-        
-        input_ids = enc.encode(prompt)
-        input_ids = torch.tensor(input_ids, dtype=torch.long, device=self.device).unsqueeze(0)
+        input_ids = self.tokenizer(prompt, return_tensors="pt").to(DEVICE)["input_ids"]
 
         start = time.monotonic()
         output = self.generate(input_ids, max_new_tokens=20, temperature=0.4)
         end = time.monotonic()
 
-        output = enc.decode(output.flatten().tolist())
+        output = self.tokenizer.batch_decode(output)[0]
         elapsed_time = end - start
         
         print(f"Output: {output}")
         print(f"Response time: {elapsed_time:.2f}s")
 
+def load_from_state_dict(original_state_dict):
+    # Naming conventions between gpt2 and this framework differ
+    name_changes = [(".h.", ".blocks."),
+                    ("attn.c_proj", "attn.out_proj"),
+                    (".ln_1.", ".attn_norm."),
+                    (".ln_2.", ".mlp_norm."),
+                    (".ln_f.", ".norm.")]
+    # GPT2 used convolutions instead of linear modules so these weights won't match
+    # our linear layer weights, instead we have to transpose them.
+    to_transpose = ["attn.c_attn.weight",
+                    "attn.c_proj.weight",
+                    "mlp.c_fc.weight",
+                    "mlp.c_proj.weight"]
+    
+    to_partition = ".c_attn."
+
+    return change_state_dict_names(original_state_dict,
+                                   name_changes,
+                                   to_transpose,
+                                   to_partition)
+
 def main():
+    # Load gpt2-xl model from huggingface to get the state dict
+    model_hf = AutoModelForCausalLM.from_pretrained(HF_MODEL_NAME)
+    state_dict = model_hf.state_dict()
+
+    new_state_dict = load_from_state_dict(state_dict)
+    del state_dict, model_hf
+    gc.collect()
+
     transformer_config = TransformerConfig.from_yml(MODEL_ARCH_FILE)
     transformer_config.ffn = GPT2FeedForward
     transformer_config.ffn.activation_fn = NewGELU()
     
-    gpt2_xl = GPT2(transformer_config)
+    with torch.no_grad():
+        gpt2_xl = GPT2(transformer_config)
+        gpt2_xl.load_state_dict(new_state_dict)
 
-    # Load gpt2-xl model from huggingface to get the state dict
-    from transformers import GPT2LMHeadModel
-    model_hf = GPT2LMHeadModel.from_pretrained(HF_MODEL_NAME)
-    state_dict = model_hf.state_dict()
+    del new_state_dict
+    gc.collect()
 
-    # Load huggingface's state dict into our model
-    gpt2_xl.load_from_state_dict(state_dict)
+    gpt2_xl.to(DEVICE)
     gpt2_xl.eval()
 
     gpt2_xl.prompt("Claude Shannon, the")

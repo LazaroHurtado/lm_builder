@@ -20,7 +20,8 @@ class GroupedQueryAttention(MultiQueryAttention):
         assert self.num_heads % self.kv_heads == 0, "Number of query heads must be divisible by the number of key/value heads."
 
         self.shared_heads = self.num_heads // self.kv_heads
-
         self.kv_dim = self.kv_heads * self.head_dim
 
-        self.qkv_proj = nn.Linear(self.embedding_dim, self.q_dim + 2*self.kv_dim)
+        self.q_proj = nn.Linear(self.embedding_dim, self.q_dim, bias=config.bias)
+        self.k_proj = nn.Linear(self.embedding_dim, self.kv_dim, bias=config.bias)
+        self.v_proj = nn.Linear(self.embedding_dim, self.kv_dim, bias=config.bias)

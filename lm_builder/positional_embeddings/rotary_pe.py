@@ -5,7 +5,7 @@ class RotaryPE(nn.Module):
     # For rotary positional embedding, we take chunks of two from the
     # token embeddings and apply a rotation.
     
-    def __init__(self, context_length: int, embedding_dim: int, inv_freq: float):
+    def __init__(self, context_length: int, embedding_dim: int, base: float):
         super().__init__()
 
         if embedding_dim % 2 != 0:
@@ -13,13 +13,9 @@ class RotaryPE(nn.Module):
 
         self.embedding_dim = embedding_dim
         self.context_length = context_length
-
-        self.register_buffer("inv_freq", torch.tensor(inv_freq))
+        self.base = base
         
-        sin_pe, cos_pe = self._generate_positional_embeddings()
-
-        self.register_buffer("sin_weight", sin_pe, persistent=False)
-        self.register_buffer("cos_weight", cos_pe, persistent=False)
+        self._generate_positional_embeddings()
 
     def _generate_positional_embeddings(self):
         # In the ReFormer paper, the positional embedding is applied to
@@ -28,32 +24,36 @@ class RotaryPE(nn.Module):
         # matrix
 
         # Since we are taking chunks of two from the token embeddings, we
-        # build the thetas to be half the size of the embedding dimension
-        # and then repeat it twice to match the embedding dimension. We call
-        # this theta to match the paper's notation
-        # (1, C)
-        power = (2*torch.arange(0, self.embedding_dim, step=2)) / self.embedding_dim
-        thetas = 1 / (self.inv_freq**power).repeat_interleave(2).unsqueeze(0)
+        # start with half the size of the embedding dimension and then repeat
+        # it twice to match the embedding dimension. In the ReFormer paper,
+        # this is called the thetas but we will refer to it as the inverse
+        # frequency, inv_freq
+        # (C)
+        power = torch.arange(0, self.embedding_dim, step=2) / self.embedding_dim
+        inv_freq = 1 / (self.base**power)
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
         
-        # For each theta, we want to multiply it by the position of the token.
+        # For each inv_freq, we want to multiply it by the position of the token.
         # We call this m to match the paper's notation
-        # (T, 1)
-        m = torch.arange(0, self.context_length).unsqueeze(-1)
+        # (T)
+        m = torch.arange(0, self.context_length)
         
-        # (T, 1) * (1, C) -> (T, C)
-        wavelengths = m*thetas
+        # (T) X (C) -> (T, C) -> (T, 2*C)
+        angles = torch.outer(m, inv_freq)
+        angles = torch.cat((angles, angles), dim=-1)
 
         # (1, T, C)
-        sin = torch.sin(wavelengths).unsqueeze(0)
-        cos = torch.cos(wavelengths).unsqueeze(0)
+        sin = torch.sin(angles).unsqueeze(0)
+        cos = torch.cos(angles).unsqueeze(0)
 
-        return (sin, cos)
+        self.register_buffer("_sin_cached", sin, persistent=False)
+        self.register_buffer("_cos_cached", cos, persistent=False)
 
     def interleave(self, x: torch.Tensor, shape: torch.Size):
         return x.t().contiguous().view(*shape)
 
-    def forward(self, x: torch.Tensor):
-        _, T, C = x.size()
+    def forward(self, x: torch.Tensor, unsqueeze_dim=1):
+        T = x.size(dim=-2)
         # Because we are applying a rotation using the sin and cos waves, we
         # have to break x up into its even and negative odd pairs to make the
         # computation easier. We do negative odd pairs because our sin tensor
@@ -76,4 +76,6 @@ class RotaryPE(nn.Module):
         # (2, B*T*C/2) -> (B, T, C)
         y = self.interleave(y, x.size())
 
-        return x * self.cos_weight[:, :T, :C] + y * self.sin_weight[:, :T, :C]
+        cos = self._cos_cached[:, :T, :].unsqueeze(unsqueeze_dim)
+        sin = self._sin_cached[:, :T, :].unsqueeze(unsqueeze_dim)
+        return x * cos + y * sin

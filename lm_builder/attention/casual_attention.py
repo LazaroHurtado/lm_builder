@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 
 from .config import AttentionConfig
-from .multi_headed_attention import MultiHeadAttention
+from .multi_head_attention import MultiHeadAttention
 
 class CausalMultiHeadAttention(MultiHeadAttention):
     

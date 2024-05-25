@@ -6,7 +6,6 @@ import torch.nn as nn
 
 from .attention import Attention
 from .config import AttentionConfig
-from .kv_cache import KVCache
 
 from torch.nn import functional as F
 
@@ -19,21 +18,20 @@ class MultiHeadAttention(nn.Module, Attention):
         self.context_len = config.context_length
         self.embedding_dim = config.embedding_dimension
         self.num_heads = config.num_heads
-        self.with_kv_cache = config.with_kv_cache
 
         self.head_dim = self.embedding_dim // self.num_heads
         
-        self.qkv_proj = nn.Linear(self.embedding_dim, 3*self.embedding_dim)
-        self.out_proj = nn.Linear(self.embedding_dim, self.embedding_dim)
+        self.q_proj = nn.Linear(self.embedding_dim, self.embedding_dim, bias=config.bias)
+        self.k_proj = nn.Linear(self.embedding_dim, self.embedding_dim, bias=config.bias)
+        self.v_proj = nn.Linear(self.embedding_dim, self.embedding_dim, bias=config.bias)
+        self.out_proj = nn.Linear(self.embedding_dim, self.embedding_dim, bias=config.bias)
+        
         self.attn_dropout = nn.Dropout(config.attn_dropout)
         self.resid_dropout = nn.Dropout(config.resid_dropout)
-
-        if self.with_kv_cache:
-            self.kv_cache = KVCache(self.context_len)
         
         self.has_positional_embedding = (config.positional_embedding is not None)
         if self.has_positional_embedding:
-            self.pos_emb = config.positional_embedding(self.context_len, self.embedding_dim, config.inv_freq)
+            self.pos_emb = config.positional_embedding(self.context_len, self.head_dim, config.inv_freq)
         
         self.has_flash_attn = hasattr(F, 'scaled_dot_product_attention')
         
@@ -45,15 +43,8 @@ class MultiHeadAttention(nn.Module, Attention):
     
     def get_qkv(self, x: torch.Tensor):
         # x has dimensionality of (batch_size, sequence_length, embedding_dim).
-        # (B, T, C) -> (B, T, 3*C)
-        qkv = self.qkv_proj(x)
-        
-        # (B, T, 3*C) -> (B, T, C), (B, T, C), (B, T, C)
-        q, k, v = qkv.split(self.embedding_dim, dim = 2)
-
-        if self.with_kv_cache and not self.training:
-            k, v = self.kv_cache.update(k ,v)
-
+        # (B, T, C) -> (B, T, C)
+        q, k, v = self.q_proj(x), self.k_proj(x), self.v_proj(x)
         return q, k, v
 
     def get_heads(self,
@@ -64,7 +55,7 @@ class MultiHeadAttention(nn.Module, Attention):
 
         # For the key and value matrices we might have hit the KV-Cache, so
         # its sequence length might not be T which is why we do `.size(dim=1)`
-        # (B, T, C) -> (B, T, num_head, head_dim) -> (B, num_heads, T, head_dim)
+        # (B, T, C) -> (B, T, num_head, head_dim) -> (B, num_head, T, head_dim)
         q_heads = query.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
         k_heads = key.view(B, key.size(dim=1), self.num_heads, self.head_dim).transpose(1, 2)
         v_heads = value.view(B, value.size(dim=1), self.num_heads, self.head_dim).transpose(1, 2)
@@ -75,12 +66,11 @@ class MultiHeadAttention(nn.Module, Attention):
                   query: torch.Tensor,
                   key: torch.Tensor,
                   value: torch.Tensor):
-        B, T, _ = query.size()
+        T = query.size(2)
         
         # (B, num_heads, T, head_dim) @ (B, num_heads, head_dim, T) -> (B, num_heads, T, T)
         scale = (1.0 / math.sqrt(key.size(dim=-1)))
         attn = (query @ key.transpose(-2, -1)) * scale
-        attn = attn.view(B, self.num_heads, T, T)
         
         # Apply mask to Q@K^T matrix. Where the mask is equal
         # to zero we will replace the matrix's element at
@@ -95,34 +85,22 @@ class MultiHeadAttention(nn.Module, Attention):
         return attn @ value
     
     def forward(self, x):
-        if self.with_kv_cache and not self.training:
-            # If we are using kv cache then we only care about the last token
-            # since we are caching previous tokens in the K and V matrices. The
-            # only exception is in the beginning when we need to populate the
-            # cache with the K and V values from the prompt, this is only done
-            # once.
-            if not self.kv_cache.first_prefill:
-                # (B, T, C) -> (B, 1, C)
-                x = x[:, -1:, :]
-            self.kv_cache.first_prefill = False
-
         # batch size, sequence length, embedding dimensionality.
-        # Here, T might be 1 if we are using kv_cache during inference.
         B, T, C = x.size()
         
         # we get the q, k, v projection of each embedding, each
         # matrix will have dimension (B, T, C)
         q, k, v = self.get_qkv(x)
-        if self.has_positional_embedding:
-            q = self.pos_emb(q)
-            k = self.pos_emb(k)
 
         # next we split the projected embeddings across the number
         # of heads we have, allowing each head to gain a different
         # interpretation.
-        # (B, num_heads, T, head_dim)
+        # (B, T, num_heads, head_dim)
         q, k, v = self.get_heads(q, k, v)
-        
+        if self.has_positional_embedding:
+            q = self.pos_emb(q)
+            k = self.pos_emb(k)
+
         if self.has_flash_attn:
             attn = F.scaled_dot_product_attention(
                 q, k, v,
