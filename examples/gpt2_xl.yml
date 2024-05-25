@@ -6,17 +6,19 @@ attention_config:
   attn_dropout: 0.1
   resid_dropout: 0.1
   bias: True
-ffn: FeedForward
+ffn: ClassicFeedForward
 ffn_config:
   embedding_dimension: 1600
   intermediate_dimension: 6400
   dropout: 0.1
-token_embedding: Embedding
+  activation_fn: GELU
+  bias: True
 positional_embedding: AbsolutePE
 attn_norm: LayerNorm
-mlp_norm: LayerNorm
-transformer_norm: LayerNorm
-bias: True
+ffn_norm: LayerNorm
+norm: LayerNorm
+bias: False
 dropout: 0.1
 vocab_size: 50257
 num_layers: 48
+norm_bias: True

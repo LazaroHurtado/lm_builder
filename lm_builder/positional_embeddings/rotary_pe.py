@@ -1,10 +1,13 @@
 import torch
-import torch.nn as nn
+
+from einops import rearrange
+from torch import nn
+
 
 class RotaryPE(nn.Module):
     # For rotary positional embedding, we take chunks of two from the
     # token embeddings and apply a rotation.
-    
+
     def __init__(self, context_length: int, embedding_dim: int, base: float):
         super().__init__()
 
@@ -14,7 +17,7 @@ class RotaryPE(nn.Module):
         self.embedding_dim = embedding_dim
         self.context_length = context_length
         self.base = base
-        
+
         self._generate_positional_embeddings()
 
     def _generate_positional_embeddings(self):
@@ -32,12 +35,12 @@ class RotaryPE(nn.Module):
         power = torch.arange(0, self.embedding_dim, step=2) / self.embedding_dim
         inv_freq = 1 / (self.base**power)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
-        
+
         # For each inv_freq, we want to multiply it by the position of the token.
         # We call this m to match the paper's notation
         # (T)
         m = torch.arange(0, self.context_length)
-        
+
         # (T) X (C) -> (T, C) -> (T, 2*C)
         angles = torch.outer(m, inv_freq)
         angles = torch.cat((angles, angles), dim=-1)
@@ -48,9 +51,6 @@ class RotaryPE(nn.Module):
 
         self.register_buffer("_sin_cached", sin, persistent=False)
         self.register_buffer("_cos_cached", cos, persistent=False)
-
-    def interleave(self, x: torch.Tensor, shape: torch.Size):
-        return x.t().contiguous().view(*shape)
 
     def forward(self, x: torch.Tensor, unsqueeze_dim=1):
         T = x.size(dim=-2)

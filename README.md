@@ -1,5 +1,5 @@
 ## Description
-This project is dedicated to increasing the development time for language models (LMs). Most LMs share the same building blocks since they are based on the transformer architecture; several layers of an attention mechanism followed by a feed forward layer. These building blocks usually differ in minor ways; grouped-query attention, mixture of experts, positional embedding. Thus, a framework dedicated to increase the speed of development for LMs by having prebuilt classes for these varients and making it easier for developers to develop their own is possible.
+This project is dedicated to decreasing the development time for language models (LMs). Most LMs share the same building blocks since they are based on the transformer architecture; several layers/blocks of an attention mechanism and feed forward layer. These building blocks usually differ in minor ways; grouped-query attention, mixture of experts, positional embedding. Thus, a framework dedicated to increase the speed of development for LMs by having prebuilt classes for these varients and making it easier for developers to develop their own is possible.
 
 ## Getting started
 Begin by creating a virtual environment (venv) and running our gpt2 example file:

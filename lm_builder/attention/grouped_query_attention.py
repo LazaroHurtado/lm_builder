@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import torch.nn as nn
-
 from .config import AttentionConfig
 from .multi_query_attention import MultiQueryAttention
+
+from torch import nn
+
 
 class GroupedQueryAttention(MultiQueryAttention):
     # GroupedQueryAttention (GQA) is similar to MultiQueryAttention (MQA) but
@@ -16,8 +17,10 @@ class GroupedQueryAttention(MultiQueryAttention):
         super().__init__(config)
 
         self.kv_heads = config.kv_heads
-        
-        assert self.num_heads % self.kv_heads == 0, "Number of query heads must be divisible by the number of key/value heads."
+
+        assert (
+            self.num_heads % self.kv_heads == 0
+        ), "Number of query heads must be divisible by the number of key/value heads."
 
         self.shared_heads = self.num_heads // self.kv_heads
         self.kv_dim = self.kv_heads * self.head_dim
