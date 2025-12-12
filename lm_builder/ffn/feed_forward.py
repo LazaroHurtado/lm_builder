@@ -1,16 +1,11 @@
-from .config import FeedForwardConfig
-
 from torch import nn
+
+from .config import FeedForwardConfig
 
 
 class FeedForward(nn.Module):
     """
-    Q1: Why do we set bias to false?
-    Q2: Why are there three linear layers?
-    Q3: Why are we doing (act(x@W2) * (x@W1))@W3?
-
-    Answers to all theses questions can be found in this paper:
-    https://arxiv.org/pdf/2002.05202v1.pdf
+    Source: https://arxiv.org/pdf/2002.05202v1.pdf
     """
 
     def __init__(self, config: FeedForwardConfig):

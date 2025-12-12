@@ -1,9 +1,10 @@
-import torch
-
 from abc import abstractmethod
 
+import torch
+import torch.nn as nn
 
-class Attention:
+
+class Attention(nn.Module):
     @abstractmethod
     def get_qkv(self, x: torch.Tensor): ...
 

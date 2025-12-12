@@ -1,9 +1,7 @@
 import torch
-import torch.nn as nn
+from torch import nn
 
 from .config import TransformerConfig
-
-from torch import nn
 
 
 class Block(nn.Module):

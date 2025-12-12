@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Optional
+
 import yaml
+from torch import nn
 
 from .. import positional_embeddings
 from ..utils import module_has_attr
-
-from dataclasses import dataclass
-from torch import nn
-from typing import Optional
 
 
 @dataclass

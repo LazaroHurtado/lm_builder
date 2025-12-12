@@ -1,21 +1,24 @@
 import time
+
 import torch
+import torch.nn.functional as F
 
 from .transformer import Transformer, TransformerConfig
 
-from torch.functional import F
-
 
 class LanguageModel(Transformer):
-
-    def __init__(self, config: TransformerConfig, tokenizer, device="cpu"):
+    def __init__(
+        self,
+        config: TransformerConfig,
+        tokenizer,
+        device="cpu",
+    ):
         super().__init__(config)
-
         self.tokenizer = tokenizer
         self.device = device
 
     @torch.inference_mode()
-    def generate(  # pylint: disable=too-many-arguments
+    def generate(
         self,
         input_ids,
         output_only=False,
@@ -24,40 +27,60 @@ class LanguageModel(Transformer):
         temperature=1.0,
         **kwargs,
     ):
+        assert temperature >= 0, "Temperature must be non-negative"
+        full_sequence = input_ids
 
         for _ in range(max_new_tokens):
-            input_context_length = input_ids.shape[-1]
-            if input_context_length > self.context_length:
-                input_ids = input_ids[:, -self.context_length :]
+            if full_sequence.shape[-1] > self.context_length:
+                model_input = full_sequence[:, -self.context_length :]
+            else:
+                model_input = full_sequence
 
-            logits, _ = self(input_ids)
-            logits = logits[:, -1, :] / temperature
+            logits, _ = self(model_input)
+            logits = logits[:, -1, :]
 
-            if top_k is not None:
-                v, _ = torch.topk(logits, top_k, dim=-1)
-                logits[logits < v[:, [-1]]] = float("-inf")
+            if temperature > 0:
+                logits = logits / temperature
 
-            probs = F.softmax(logits, dim=-1)
+                if top_k is not None:
+                    v, _ = torch.topk(logits, min(top_k, logits.size(-1)), dim=-1)
+                    logits[logits < v[:, [-1]]] = float("-inf")
 
-            next_id = torch.multinomial(probs, num_samples=1)
+                probs = F.softmax(logits, dim=-1)
+                next_id = torch.multinomial(probs, num_samples=1)
+            else:
+                next_id = torch.argmax(logits, dim=-1, keepdim=True)
 
-            input_ids = torch.cat((input_ids, next_id), dim=1)
+            full_sequence = torch.cat((full_sequence, next_id), dim=1)
 
         if output_only:
-            return input_ids[:, -max_new_tokens:]
-        return input_ids
+            return full_sequence[:, -max_new_tokens:]
+        return full_sequence
 
-    def prompt(self, prompt, **kwargs):
-        input_ids = self.tokenizer(prompt, return_tensors="pt").input_ids.to(
-            self.device
-        )
+    def prompt(self, prompts, apply_chat_template=False, debug=False, **kwargs):
+        if isinstance(prompts, str):
+            prompts = [prompts]
+
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.tokenizer.padding_side = "left"
+
+        if apply_chat_template:
+            prompts = self.tokenizer.apply_chat_template(
+                prompts, add_generation_prompt=True, tokenize=False
+            )
+
+        input_ids = self.tokenizer(
+            prompts, return_tensors="pt", padding=True
+        ).input_ids.to(self.device)
 
         start = time.monotonic()
-        output = self.generate(input_ids, **kwargs)
+        output_ids = self.generate(input_ids, **kwargs)
         end = time.monotonic()
 
-        output = self.tokenizer.batch_decode(output, skip_special_tokens=True)[0]
-        elapsed_time = end - start
+        if debug:
+            print(f"Generation took {end - start:.2f} seconds")
 
-        print(f"Output: {output}")
-        print(f"Response time: {elapsed_time:.2f}s")
+        outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)
+
+        return outputs[0] if len(outputs) == 1 else outputs

@@ -1,6 +1,6 @@
-from .config import FeedForwardConfig
-
 from torch import nn
+
+from .config import FeedForwardConfig
 
 
 class ClassicFeedForward(nn.Module):

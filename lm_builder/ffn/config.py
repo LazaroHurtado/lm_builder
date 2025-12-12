@@ -1,18 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import yaml
+from torch import nn
 
 from ..utils import module_has_attr
-
-from dataclasses import dataclass
-from torch import nn
 
 
 @dataclass
 class FeedForwardConfig:
     embedding_dimension: int
     intermediate_dimension: int
-    activation_fn: nn.Module = nn.GELU()
+    activation_fn: nn.Module = nn.GELU
     dropout: float = 0.0
     bias: bool = False
     num_experts: int = 0

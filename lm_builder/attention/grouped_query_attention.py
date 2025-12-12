@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+from torch import nn
+
 from .config import AttentionConfig
 from .multi_query_attention import MultiQueryAttention
-
-from torch import nn
 
 
 class GroupedQueryAttention(MultiQueryAttention):

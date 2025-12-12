@@ -1,7 +1,7 @@
-import torch
-
 from collections import OrderedDict
 from functools import reduce
+
+import torch
 
 
 def module_has_attr(config, key, primary_module, fallback_module=None):

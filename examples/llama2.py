@@ -1,19 +1,18 @@
-import torch
 import gc
+import os
 
-from lm_builder import LanguageModel
-from lm_builder.transformer import TransformerConfig
-from lm_builder.positional_embeddings.rotary_pe import RotaryPE
-from lm_builder.utils import change_state_dict_names
-
+import torch
 from dotenv import load_dotenv
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from lm_builder import LanguageModel
+from lm_builder.positional_embeddings.rotary_pe import RotaryPE
+from lm_builder.transformer import TransformerConfig
+from lm_builder.utils import change_state_dict_names
+
 load_dotenv()
 
-DEVICE = "cpu"
-MODEL_ARCH_FILE = "examples/llama2_7b_chat.yml"
-HF_MODEL_NAME = "meta-llama/Llama-2-7b-chat-hf"
+DEVICE = "cuda"
 
 
 class LlamaRoPE(RotaryPE):
@@ -29,54 +28,82 @@ class LlamaRoPE(RotaryPE):
         return x * cos + y * sin
 
 
-def load_from_state_dict(original_state_dict):
-    name_changes = [
-        ("model.", "transformer."),
-        (".mlp.", ".ffn."),
-        (".layers.", ".blocks."),
-        ("input_layernorm", "attn_norm"),
-        ("rotary_emb", "pos_emb"),
-        ("o_proj", "out_proj"),
-        ("self_attn", "attn"),
-        ("post_attention_layernorm", "ffn_norm"),
-        (".embed_tokens.weight", ".wte.weight"),
-    ]
+class Llama2Loader:
+    MODEL_ARCH_FILE = "examples/llama2_7b_chat.yml"
+    HF_MODEL_NAME = "meta-llama/Llama-2-7b-chat-hf"
+    WEIGHTS_FILE = "llama2_weights.pth"
 
-    return change_state_dict_names(original_state_dict, name_changes)
+    def build_state_dict(self):
+        # Load llama2-7b-chat model from huggingface to get the state dict
+        model_hf = AutoModelForCausalLM.from_pretrained(
+            self.HF_MODEL_NAME, device_map="cpu"
+        )
+        state_dict = model_hf.state_dict()
+
+        new_state_dict = self.convert_state_dict(state_dict)
+        del model_hf, state_dict
+        gc.collect()
+
+        torch.save(new_state_dict, self.WEIGHTS_FILE)
+        del new_state_dict
+        gc.collect()
+
+    def build_model(self, rank):
+        transformer_config = TransformerConfig.from_yml(self.MODEL_ARCH_FILE)
+        transformer_config.attention_config.positional_embedding = LlamaRoPE
+
+        tokenizer = AutoTokenizer.from_pretrained(self.HF_MODEL_NAME)
+
+        with torch.no_grad():
+            llama2_7b = LanguageModel(
+                transformer_config,
+                tokenizer,
+                device=rank,
+            )
+            llama2_7b.to(rank)
+            llama2_7b.eval()
+        return llama2_7b
+
+    def convert_state_dict(self, original_state_dict):
+        name_changes = [
+            ("model.", "transformer."),
+            (".mlp.", ".ffn."),
+            (".layers.", ".blocks."),
+            ("input_layernorm", "attn_norm"),
+            ("rotary_emb", "pos_emb"),
+            ("o_proj", "out_proj"),
+            ("self_attn", "attn"),
+            ("post_attention_layernorm", "ffn_norm"),
+            (".embed_tokens.weight", ".wte.weight"),
+        ]
+
+        return change_state_dict_names(original_state_dict, name_changes)
 
 
 def main():
-    # Load llama2-7b-chat model from huggingface to get the state dict
-    model_hf = AutoModelForCausalLM.from_pretrained(HF_MODEL_NAME, device_map="cpu")
-    state_dict = model_hf.state_dict()
-
-    new_state_dict = load_from_state_dict(state_dict)
-    del model_hf, state_dict
-    gc.collect()
-
-    transformer_config = TransformerConfig.from_yml(MODEL_ARCH_FILE)
-    transformer_config.attention_config.positional_embedding = LlamaRoPE
-
-    tokenizer = AutoTokenizer.from_pretrained(HF_MODEL_NAME)
+    if not os.path.exists("llama2_weights.pth"):
+        print("Building Llama2 state dict...")
+        Llama2Loader().build_state_dict()
 
     with torch.no_grad():
-        tokenizer = AutoTokenizer.from_pretrained(HF_MODEL_NAME)
-        llama2_7b = LanguageModel(transformer_config, tokenizer, device=DEVICE)
-        llama2_7b.load_state_dict(new_state_dict)
+        llama2_7b = Llama2Loader().build_model(DEVICE)
+        state_dict = torch.load(Llama2Loader.WEIGHTS_FILE, map_location="cpu")
+        llama2_7b.load_state_dict(state_dict)
 
-    del new_state_dict
-    gc.collect()
+        del state_dict
+        gc.collect()
 
-    llama2_7b.to(DEVICE)
-    llama2_7b.eval()
+        messages = [
+            {"role": "user", "content": "Who is Claude Shannon?"},
+        ]
 
-    llama2_7b.prompt(
-        "[INST] Who is Claude Shannon? [/INST]",
-        output_only=True,
-        top_k=2,
-        max_new_tokens=20,
-        temperature=0.9,
-    )
+        llama2_7b.prompt(
+            messages,
+            max_new_tokens=20,
+            temperature=0.9,
+            apply_chat_template=True,
+            debug=True,
+        )
 
 
 if __name__ == "__main__":

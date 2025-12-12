@@ -1,3 +1,3 @@
 from .block import Block
-from .transformer import Transformer
 from .config import TransformerConfig
+from .transformer import Transformer

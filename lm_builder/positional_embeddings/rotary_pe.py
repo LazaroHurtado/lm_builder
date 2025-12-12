@@ -1,6 +1,4 @@
 import torch
-
-from einops import rearrange
 from torch import nn
 
 
@@ -29,7 +27,7 @@ class RotaryPE(nn.Module):
         # Since we are taking chunks of two from the token embeddings, we
         # start with half the size of the embedding dimension and then repeat
         # it twice to match the embedding dimension. In the ReFormer paper,
-        # this is called the thetas but we will refer to it as the inverse
+        # this is called the thetas, but we will refer to it as the inverse
         # frequency, inv_freq
         # (C)
         power = torch.arange(0, self.embedding_dim, step=2) / self.embedding_dim

@@ -1,9 +1,8 @@
 import torch
+from torch import nn
 
 from .config import FeedForwardConfig
 from .feed_forward import FeedForward
-
-from torch import nn
 
 
 class MixtureOfExperts(nn.Module):
@@ -32,7 +31,7 @@ class MixtureOfExperts(nn.Module):
         #   https://github.com/dzhulgakov/llama-mistral/blob/main/llama/model.py#L350
         # Comments and explanations are my own
 
-        orig_shape = x.shape()
+        orig_shape = x.shape
         # (B, T, C) -> (B*T, C)
         x = x.view(-1, self.embedding_dim)
 

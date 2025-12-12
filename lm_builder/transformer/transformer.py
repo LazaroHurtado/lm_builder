@@ -1,8 +1,8 @@
-from .block import Block
-from .config import TransformerConfig
-
 from torch import nn
 from torch.nn import functional as F
+
+from .block import Block
+from .config import TransformerConfig
 
 
 class Transformer(nn.Module):

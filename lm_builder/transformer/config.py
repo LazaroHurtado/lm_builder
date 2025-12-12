@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import yaml
-
-from .. import attention
-from .. import ffn
-from .. import normalizers
-from .. import positional_embeddings
-from ..utils import module_has_attr
-
 from dataclasses import dataclass
-from torch import nn
 from typing import Optional
+
+import yaml
+from torch import nn
+
+from lm_builder import attention, ffn, normalizers, positional_embeddings
+from lm_builder.utils import module_has_attr
 
 
 @dataclass

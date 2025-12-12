@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import math
+
 import torch
+from torch import nn
+from torch.nn import functional as F
 
 from .attention import Attention
 from .config import AttentionConfig
 
-from torch import nn
-from torch.nn import functional as F
 
-
-class MultiHeadAttention(nn.Module, Attention):
+class MultiHeadAttention(Attention):
 
     def __init__(self, config: AttentionConfig):
         super().__init__()
@@ -67,9 +67,9 @@ class MultiHeadAttention(nn.Module, Attention):
         # its sequence length might not be T which is why we do `.size(dim=1)`
         # (B, T, C) -> (B, T, num_head, head_dim) -> (B, num_head, T, head_dim)
         q_heads = query.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
-        k_heads = key.view(
-            B, key.size(dim=1), self.num_heads, self.head_dim
-        ).transpose(1, 2)
+        k_heads = key.view(B, key.size(dim=1), self.num_heads, self.head_dim).transpose(
+            1, 2
+        )
         v_heads = value.view(
             B, value.size(dim=1), self.num_heads, self.head_dim
         ).transpose(1, 2)

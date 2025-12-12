@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import torch
-
-from .config import AttentionConfig
-from .casual_attention import CausalMultiHeadAttention
-
 from torch import nn
+
+from .casual_attention import CausalMultiHeadAttention
+from .config import AttentionConfig
 
 
 class MultiQueryAttention(CausalMultiHeadAttention):
@@ -44,9 +43,9 @@ class MultiQueryAttention(CausalMultiHeadAttention):
         q_heads = query.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
 
         # (B, T, head_dim) -> (B, T, 1, head_dim)
-        k_heads = key.view(
-            B, key.size(dim=1), self.kv_heads, self.head_dim
-        ).transpose(1, 2)
+        k_heads = key.view(B, key.size(dim=1), self.kv_heads, self.head_dim).transpose(
+            1, 2
+        )
         v_heads = value.view(
             B, value.size(dim=1), self.kv_heads, self.head_dim
         ).transpose(1, 2)
