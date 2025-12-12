@@ -17,10 +17,11 @@ dependencies = [
     "transformers",
 ]
 
-[project.optional-dependencies]
-linting = [
-    "pylint",
+[dependency-groups]
+dev = [
     "black",
+    "pylint",
+    "pytest",
 ]
 
 [build-system]

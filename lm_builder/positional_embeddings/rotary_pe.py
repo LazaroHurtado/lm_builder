@@ -6,14 +6,13 @@ class RotaryPE(nn.Module):
     # For rotary positional embedding, we take chunks of two from the
     # token embeddings and apply a rotation.
 
-    def __init__(self, context_length: int, embedding_dim: int, base: float):
+    def __init__(self, embedding_dim: int, base: float, **kwargs):
         super().__init__()
 
         if embedding_dim % 2 != 0:
             embedding_dim += 1
 
         self.embedding_dim = embedding_dim
-        self.context_length = context_length
         self.base = base
 
         self._generate_positional_embeddings()
@@ -30,50 +29,43 @@ class RotaryPE(nn.Module):
         # this is called the thetas, but we will refer to it as the inverse
         # frequency, inv_freq
         # (C)
-        power = torch.arange(0, self.embedding_dim, step=2) / self.embedding_dim
-        inv_freq = 1 / (self.base**power)
+        power = (
+            torch.arange(0, self.embedding_dim, step=2, dtype=torch.float)
+            / self.embedding_dim
+        )
+        inv_freq = 1.0 / (self.base**power)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
-        # For each inv_freq, we want to multiply it by the position of the token.
-        # We call this m to match the paper's notation
-        # (T)
-        m = torch.arange(0, self.context_length)
-
-        # (T) X (C) -> (T, C) -> (T, 2*C)
-        angles = torch.outer(m, inv_freq)
-        angles = torch.cat((angles, angles), dim=-1)
-
-        # (1, T, C)
-        sin = torch.sin(angles).unsqueeze(0)
-        cos = torch.cos(angles).unsqueeze(0)
-
-        self.register_buffer("_sin_cached", sin, persistent=False)
-        self.register_buffer("_cos_cached", cos, persistent=False)
-
-    def forward(self, x: torch.Tensor, unsqueeze_dim=1):
-        T = x.size(dim=-2)
-        # Because we are applying a rotation using the sin and cos waves, we
-        # have to break x up into its even and negative odd pairs to make the
-        # computation easier. We do negative odd pairs because our sin tensor
-        # is all positive.
+    def rotate_half(self, x: torch.Tensor):
+        # Helper function to rotate the last dimension of x by half. This differs
+        # from the math notation in the RoPE paper, which uses pairs [(x_1, x_2), (x_3, x_4)],
+        # but it is equivalent.
         # Example:
-        #   Assume T=1 and C=4 and x is the following tensor
-        #   [[0.4, 0.2, 0.8, 0.3]]
-        #   recall that for RoPE we take chunks of two and then apply a rotation, so
-        #   the first rotation is:
-        #   cos(a), -sin(a),  @  0.4,  =  0.4cos(a) - 0.2sin(a)  = 0.4cos(a) - 0.2sin(a)
-        #   sin(a),  cos(a)      0.2      0.4sin(a) + 0.2cos(a)    0.2cos(a) + 0.4sin(a)
-        #   If we were to expand this to a larger input tensor, we would
-        #   see that cos(a) gets multiplied to all values in the tensor
-        #   and -sin(a) gets multiplied only to odd indices while sin(a) gets
-        #   multiplied only to even indices.
-        # (B, T, C/2)
-        neg_odds, pos_evens = -x[..., 1::2], x[..., ::2]
-        # (B, T, C/2) -> (2, B*T*C/2)
-        y = torch.stack([neg_odds.reshape(-1), pos_evens.reshape(-1)])
-        # (2, B*T*C/2) -> (B, T, C)
-        y = self.interleave(y, x.size())
+        #   Assume we have a tensor x with shape (B, T, C) where C=4
+        #   [[1.0, 2.0, 3.0, 4.0]]
+        #   We want to split this tensor into two halves:
+        #   first half:  [1.0, 2.0]
+        #   second half: [3.0, 4.0]
+        #   Then we want to rotate these halves such that:
+        #   rotated: [-2.0, -3.0, 0.0, 1.0]
+        #   This is equivalent to taking the negative of the odd indices
+        #   and swapping them with the even indices.
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
 
-        cos = self._cos_cached[:, :T, :].unsqueeze(unsqueeze_dim)
-        sin = self._sin_cached[:, :T, :].unsqueeze(unsqueeze_dim)
-        return x * cos + y * sin
+    # TODO: The cos and sin can be calculated before calling the attention heads for speed-up gains
+    def forward(self, q: torch.Tensor, k: torch.Tensor, position_ids, unsqueeze_dim=1):
+        C = position_ids.shape[0]
+        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(C, -1, 1)
+        position_ids_expanded = position_ids[:, None, :].float()
+
+        freqs = (inv_freq_expanded @ position_ids_expanded).transpose(1, 2)
+        emb = torch.cat((freqs, freqs), dim=-1)
+
+        cos = emb.cos().unsqueeze(unsqueeze_dim)
+        sin = emb.sin().unsqueeze(unsqueeze_dim)
+
+        q_embed = (q * cos) + (self.rotate_half(q) * sin)
+        k_embed = (k * cos) + (self.rotate_half(k) * sin)
+        return q_embed, k_embed
