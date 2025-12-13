@@ -8,19 +8,20 @@ from transformers.models.llama.modeling_llama import (
 
 from lm_builder.positional_embeddings.rotary_pe import RotaryPE
 
-EMBEDDING_DIM = 64
+NUM_HEAD = 4
+HEAD_DIM = 64
 BASE = 10000.0
 
 
 @pytest.fixture
 def rope():
-    return RotaryPE(EMBEDDING_DIM, BASE)
+    return RotaryPE(HEAD_DIM, BASE)
 
 
 @pytest.fixture
 def hf_rope():
     config = LlamaConfig(
-        max_position_embeddings=EMBEDDING_DIM, head_dim=EMBEDDING_DIM, rope_theta=BASE
+        max_position_embeddings=HEAD_DIM, head_dim=HEAD_DIM, rope_theta=BASE
     )
     return LlamaRotaryEmbedding(config, device="cpu")
 
@@ -67,8 +68,8 @@ def test_rope(rope: RotaryPE, hf_rope: LlamaRotaryEmbedding):
     batch_size = 2
 
     # Create dummy Q and K tensors
-    q = torch.randn(batch_size, seq_len, EMBEDDING_DIM)
-    k = torch.randn(batch_size, seq_len, EMBEDDING_DIM)
+    q = torch.randn(batch_size, NUM_HEAD, seq_len, HEAD_DIM)
+    k = torch.randn(batch_size, NUM_HEAD, seq_len, HEAD_DIM)
 
     # Position IDs
     position_ids = torch.arange(seq_len).unsqueeze(0).repeat(batch_size, 1)
@@ -81,9 +82,6 @@ def test_rope(rope: RotaryPE, hf_rope: LlamaRotaryEmbedding):
     q_hf_rotary, k_hf_rotary = apply_rotary_pos_emb(
         q, k, hf_cos, hf_sin, unsqueeze_dim=1
     )
-
-    print("Custom RotaryPE Q Rotary:", q_rotary)
-    print("HF RotaryPE Q Rotary:", q_hf_rotary)
 
     assert torch.allclose(q_rotary, q_hf_rotary, atol=1e-5)
     assert torch.allclose(k_rotary, k_hf_rotary, atol=1e-5)
