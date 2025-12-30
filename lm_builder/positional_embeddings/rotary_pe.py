@@ -6,14 +6,17 @@ class RotaryPE(nn.Module):
     # For rotary positional embedding, we take chunks of two from the
     # token embeddings and apply a rotation.
 
-    def __init__(self, embedding_dim: int, base: float, **kwargs):
+    def __init__(self, embedding_dim: int, context_len: int, base: float, **kwargs):
         super().__init__()
 
         if embedding_dim % 2 != 0:
             embedding_dim += 1
 
         self.embedding_dim = embedding_dim
+        self.context_len = context_len
         self.base = base
+
+        self.cos, self.sin = None, None
 
         self._generate_positional_embeddings()
 
@@ -36,6 +39,31 @@ class RotaryPE(nn.Module):
         inv_freq = 1.0 / (self.base**power)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
+        t = torch.arange(self.context_len, dtype=self.inv_freq.dtype)
+        freqs = torch.outer(t, self.inv_freq)
+        emb = torch.cat((freqs, freqs), dim=-1)
+
+        self.register_buffer("cos_cached", emb.cos(), persistent=False)
+        self.register_buffer("sin_cached", emb.sin(), persistent=False)
+
+    def _apply(self, fn):
+        if self.inv_freq.device.type == "meta":
+            self._generate_positional_embeddings()
+        return super()._apply(fn)
+
+    def _get_cos_sin_embeddings(self, position_ids, device, unsqueeze_dim=1):
+        C = position_ids.shape[0]
+        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(C, -1, 1)
+        position_ids_expanded = position_ids[:, None, :].float()
+
+        freqs = (inv_freq_expanded @ position_ids_expanded).transpose(1, 2)
+        emb = torch.cat((freqs, freqs), dim=-1)
+
+        self.cos = emb.cos().unsqueeze(unsqueeze_dim).to(device)
+        self.sin = emb.sin().unsqueeze(unsqueeze_dim).to(device)
+
+        return self.cos, self.sin
+
     def rotate_half(self, x: torch.Tensor):
         # Helper function to rotate the last dimension of x by half. This differs
         # from the math notation in the RoPE paper, which uses pairs [(x_1, x_2), (x_3, x_4)],
@@ -54,17 +82,19 @@ class RotaryPE(nn.Module):
         x2 = x[..., x.shape[-1] // 2 :]
         return torch.cat((-x2, x1), dim=-1)
 
-    # TODO: The cos and sin can be calculated before calling the attention heads for speed-up gains
-    def forward(self, q: torch.Tensor, k: torch.Tensor, position_ids, unsqueeze_dim=1):
-        C = position_ids.shape[0]
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(C, -1, 1)
-        position_ids_expanded = position_ids[:, None, :].float()
+    def forward(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        unsqueeze_dim=1,
+    ):
+        # q: (B, H, T, D)
+        T = q.shape[2]
 
-        freqs = (inv_freq_expanded @ position_ids_expanded).transpose(1, 2)
-        emb = torch.cat((freqs, freqs), dim=-1)
-
-        cos = emb.cos().unsqueeze(unsqueeze_dim)
-        sin = emb.sin().unsqueeze(unsqueeze_dim)
+        # Index into the cached tables
+        # self.cos_cached: (MaxT, D) -> (B, T, D) via slicing
+        cos = self.cos_cached[:T].unsqueeze(0).unsqueeze(unsqueeze_dim)
+        sin = self.sin_cached[:T].unsqueeze(0).unsqueeze(unsqueeze_dim)
 
         q_embed = (q * cos) + (self.rotate_half(q) * sin)
         k_embed = (k * cos) + (self.rotate_half(k) * sin)

@@ -36,7 +36,7 @@ class Transformer(nn.Module):
         self.config = config
 
     def forward(self, x, targets=None):
-        _, T = x.size()  # pylint: disable=invalid-name
+        B, T = x.size()  # pylint: disable=invalid-name
         assert T <= self.context_length
 
         # Token embedding layer

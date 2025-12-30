@@ -11,11 +11,12 @@ from lm_builder.positional_embeddings.rotary_pe import RotaryPE
 NUM_HEAD = 4
 HEAD_DIM = 64
 BASE = 10000.0
+SEQ_LEN = 10
 
 
 @pytest.fixture
 def rope():
-    return RotaryPE(HEAD_DIM, BASE)
+    return RotaryPE(HEAD_DIM, SEQ_LEN, BASE)
 
 
 @pytest.fixture
@@ -37,7 +38,7 @@ def test_initialization(rope: RotaryPE):
 
 def test_odd_embedding_dim_adjustment():
     """Test that odd embedding dimensions are adjusted to be even."""
-    rope = RotaryPE(63, 10000.0)
+    rope = RotaryPE(63, SEQ_LEN, BASE)
     assert rope.embedding_dim == 64
     assert rope.inv_freq.shape == (32,)
 
@@ -64,18 +65,16 @@ def test_rope_inv_freq(rope: RotaryPE, hf_rope: LlamaRotaryEmbedding):
 
 def test_rope(rope: RotaryPE, hf_rope: LlamaRotaryEmbedding):
     """Test that the forward method produces similar results to Hugging Face's implementation."""
-    seq_len = 10
     batch_size = 2
 
     # Create dummy Q and K tensors
-    q = torch.randn(batch_size, NUM_HEAD, seq_len, HEAD_DIM)
-    k = torch.randn(batch_size, NUM_HEAD, seq_len, HEAD_DIM)
-
+    q = torch.randn(batch_size, NUM_HEAD, SEQ_LEN, HEAD_DIM)
+    k = torch.randn(batch_size, NUM_HEAD, SEQ_LEN, HEAD_DIM)
     # Position IDs
-    position_ids = torch.arange(seq_len).unsqueeze(0).repeat(batch_size, 1)
+    position_ids = torch.arange(SEQ_LEN).unsqueeze(0).repeat(batch_size, 1)
 
     # Apply custom RotaryPE
-    q_rotary, k_rotary = rope(q, k, position_ids, unsqueeze_dim=1)
+    q_rotary, k_rotary = rope(q, k, unsqueeze_dim=1)
 
     # Apply Hugging Face's Rotary Embedding
     hf_cos, hf_sin = hf_rope(q, position_ids)

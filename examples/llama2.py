@@ -6,26 +6,17 @@ from dotenv import load_dotenv
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from lm_builder import LanguageModel
-from lm_builder.positional_embeddings.rotary_pe import RotaryPE
 from lm_builder.transformer import TransformerConfig
 from lm_builder.utils import change_state_dict_names
 
 load_dotenv()
 
-DEVICE = "cuda"
-
-
-class LlamaRoPE(RotaryPE):
-    def forward(self, x: torch.Tensor, unsqueeze_dim=1):
-        T = x.size(dim=-2)
-
-        x1 = x[..., : x.shape[-1] // 2]
-        x2 = x[..., x.shape[-1] // 2 :]
-        y = torch.cat((-x2, x1), dim=-1)
-
-        cos = self._cos_cached[:, :T, :].unsqueeze(unsqueeze_dim)
-        sin = self._sin_cached[:, :T, :].unsqueeze(unsqueeze_dim)
-        return x * cos + y * sin
+if torch.cuda.is_available():
+    DEVICE = "cuda"
+elif torch.backends.mps.is_available():
+    DEVICE = "mps"
+else:
+    DEVICE = "cpu"
 
 
 class Llama2Loader:
@@ -50,16 +41,10 @@ class Llama2Loader:
 
     def build_model(self, rank):
         transformer_config = TransformerConfig.from_yml(self.MODEL_ARCH_FILE)
-        transformer_config.attention_config.positional_embedding = LlamaRoPE
-
         tokenizer = AutoTokenizer.from_pretrained(self.HF_MODEL_NAME)
 
         with torch.no_grad():
-            llama2_7b = LanguageModel(
-                transformer_config,
-                tokenizer,
-                device=rank,
-            )
+            llama2_7b = LanguageModel(transformer_config, tokenizer)
             llama2_7b.to(rank)
             llama2_7b.eval()
         return llama2_7b
@@ -86,9 +71,9 @@ def main():
         Llama2Loader().build_state_dict()
 
     with torch.no_grad():
-        llama2_7b = Llama2Loader().build_model(DEVICE)
-        state_dict = torch.load(Llama2Loader.WEIGHTS_FILE, map_location="cpu")
-        llama2_7b.load_state_dict(state_dict)
+        llama2_7b = Llama2Loader().build_model("meta")
+        state_dict = torch.load(Llama2Loader.WEIGHTS_FILE, map_location=DEVICE)
+        llama2_7b.load_state_dict(state_dict, assign=True)
 
         del state_dict
         gc.collect()
@@ -97,13 +82,17 @@ def main():
             {"role": "user", "content": "Who is Claude Shannon?"},
         ]
 
-        llama2_7b.prompt(
+        llama2_7b.to(DEVICE)
+        output = llama2_7b.prompt(
             messages,
-            max_new_tokens=20,
-            temperature=0.9,
+            max_new_tokens=100,
+            temperature=0,
             apply_chat_template=True,
             debug=True,
+            device=DEVICE,
+            stream=True,
         )
+        print(output)
 
 
 if __name__ == "__main__":

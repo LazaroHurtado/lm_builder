@@ -4,18 +4,13 @@ import torch
 import torch.nn.functional as F
 
 from .transformer import Transformer, TransformerConfig
+from tqdm import tqdm
 
 
 class LanguageModel(Transformer):
-    def __init__(
-        self,
-        config: TransformerConfig,
-        tokenizer,
-        device="cpu",
-    ):
+    def __init__(self, config: TransformerConfig, tokenizer):
         super().__init__(config)
         self.tokenizer = tokenizer
-        self.device = device
 
     @torch.inference_mode()
     def generate(
@@ -25,18 +20,29 @@ class LanguageModel(Transformer):
         top_k=None,
         max_new_tokens=20,
         temperature=1.0,
+        stream=False,
         **kwargs,
     ):
         assert temperature >= 0, "Temperature must be non-negative"
         full_sequence = input_ids
 
-        for _ in range(max_new_tokens):
+        iterator = range(max_new_tokens)
+        if not stream:
+            iterator = tqdm(iterator)
+
+        for _ in iterator:
             if full_sequence.shape[-1] > self.context_length:
                 model_input = full_sequence[:, -self.context_length :]
             else:
                 model_input = full_sequence
 
-            logits, _ = self(model_input)
+            position_ids = (
+                torch.arange(model_input.shape[1], device=model_input.device)
+                .unsqueeze(0)
+                .repeat(model_input.shape[0], 1)
+            )
+
+            logits, _ = self(model_input, position_ids=position_ids)
             logits = logits[:, -1, :]
 
             if temperature > 0:
@@ -53,11 +59,23 @@ class LanguageModel(Transformer):
 
             full_sequence = torch.cat((full_sequence, next_id), dim=1)
 
-        if output_only:
-            return full_sequence[:, -max_new_tokens:]
-        return full_sequence
+            if stream:
+                yield next_id
 
-    def prompt(self, prompts, apply_chat_template=False, debug=False, **kwargs):
+        if not stream:
+            if output_only:
+                return full_sequence[:, -max_new_tokens:]
+            return full_sequence
+
+    def prompt(
+        self,
+        prompts,
+        apply_chat_template=False,
+        debug=False,
+        device="cpu",
+        stream=False,
+        **kwargs,
+    ):
         if isinstance(prompts, str):
             prompts = [prompts]
 
@@ -72,10 +90,25 @@ class LanguageModel(Transformer):
 
         input_ids = self.tokenizer(
             prompts, return_tensors="pt", padding=True
-        ).input_ids.to(self.device)
+        ).input_ids.to(device)
 
         start = time.monotonic()
-        output_ids = self.generate(input_ids, **kwargs)
+        output_ids = self.generate(input_ids, stream=stream, **kwargs)
+        if stream:
+            next_token_ids = output_ids
+            output_ids = input_ids
+
+            previous_text = self.tokenizer.decode(
+                output_ids[0], skip_special_tokens=True
+            )
+            for next_id in next_token_ids:
+                output_ids = torch.cat((output_ids, next_id), dim=1)
+                current_text = self.tokenizer.decode(
+                    output_ids[0], skip_special_tokens=True
+                )
+                print(current_text[len(previous_text) :], end="", flush=True)
+                previous_text = current_text
+            print()
         end = time.monotonic()
 
         if debug:

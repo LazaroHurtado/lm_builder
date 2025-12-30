@@ -41,18 +41,24 @@ class MultiHeadAttention(Attention):
         self.has_positional_embedding = config.positional_embedding is not None
         if self.has_positional_embedding:
             self.pos_emb = config.positional_embedding(
-                self.context_len, self.head_dim, config.inv_freq
+                self.head_dim, config.context_length, config.inv_freq
             )
 
         self.has_flash_attn = hasattr(F, "scaled_dot_product_attention")
 
+        self._register_mask()
+
+    def _register_mask(self):
         self.register_buffer(
             "attention_mask",
             torch.ones(self.context_len, self.context_len)[None, None, :, :],
             persistent=False,
         )
 
-        self._config = config
+    def _apply(self, fn):
+        if self.attention_mask.device.type == "meta":
+            self._register_mask()
+        return super()._apply(fn)
 
     def get_qkv(self, x: torch.Tensor):
         # x has dimensionality of (batch_size, sequence_length, embedding_dim).
@@ -106,11 +112,10 @@ class MultiHeadAttention(Attention):
         # next we split the projected embeddings across the number
         # of heads we have, allowing each head to gain a different
         # interpretation.
-        # (B, T, num_heads, head_dim)
+        # (B, num_head, T, head_dim)
         q, k, v = self.get_heads(q, k, v)
         if self.has_positional_embedding:
-            q = self.pos_emb(q)
-            k = self.pos_emb(k)
+            q, k = self.pos_emb(q, k)
 
         if self.has_flash_attn:
             attn = F.scaled_dot_product_attention(  # pylint: disable=not-callable
