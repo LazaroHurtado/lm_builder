@@ -15,7 +15,6 @@ dependencies = [
     "torch",
     "tiktoken",
     "transformers",
-    "tqdm>=4.67.1",
 ]
 
 [dependency-groups]

@@ -31,7 +31,6 @@ class AbsolutePE(nn.Module):
         # dimension of the embedding
         # (C/2)
         inv_freq = 1 / (self.base**power)
-        self.register_buffer("inv_freq", inv_freq, persistent=False)
 
         # The next step is to multiply the position by the scaling factor, pos/10_000**(2i/d_model)
         # (T) X (C/2) -> (T, C/2)
@@ -47,10 +46,14 @@ class AbsolutePE(nn.Module):
         # (2, T*C/2)
         sinusoids = torch.stack((sin, cos))
         # (T, C)
-        sinusoids = self.interleave(
-            sinusoids, (self.context_length, self.embedding_dim)
+        self.weight = nn.Parameter(
+            self.interleave(sinusoids, (self.context_length, self.embedding_dim))
         )
-        self.register_buffer("weight", sinusoids)
+
+    def _apply(self, fn):
+        if self.weight.device.type == "meta":
+            self._generate_positional_embeddings()
+        return super()._apply(fn)
 
     def interleave(self, x: torch.Tensor, shape: torch.Size):
         # I will explain this through an example:

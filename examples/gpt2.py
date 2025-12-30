@@ -41,7 +41,7 @@ class GPT2Loader:
         )
 
         with torch.no_grad():
-            gpt2_xl = LanguageModel(transformer_config, tokenizer, device=rank)
+            gpt2_xl = LanguageModel(transformer_config, tokenizer)
             gpt2_xl.to(rank)
             gpt2_xl.eval()
         return gpt2_xl
@@ -80,17 +80,22 @@ def main():
         GPT2Loader.build_state_dict()
 
     with torch.no_grad():
-        gpt2_xl = GPT2Loader.build_model(DEVICE)
+        gpt2_xl = GPT2Loader.build_model("meta")
         state_dict = torch.load(GPT2Loader.WEIGHTS_FILE, map_location="cpu")
-        gpt2_xl.load_state_dict(state_dict)
+        gpt2_xl.load_state_dict(state_dict, assign=True)
 
         del state_dict
         gc.collect()
 
-        output = gpt2_xl.prompt(
-            "Claude Shannon, the", max_new_tokens=200, temperature=0.9, debug=True
+        gpt2_xl.to(DEVICE)
+        gpt2_xl.prompt(
+            "Claude Shannon, the",
+            max_new_tokens=200,
+            temperature=0.9,
+            stream=True,
+            debug=True,
+            device=DEVICE,
         )
-        print(output)
 
 
 if __name__ == "__main__":

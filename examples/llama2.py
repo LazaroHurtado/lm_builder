@@ -72,7 +72,7 @@ def main():
 
     with torch.no_grad():
         llama2_7b = Llama2Loader().build_model("meta")
-        state_dict = torch.load(Llama2Loader.WEIGHTS_FILE, map_location=DEVICE)
+        state_dict = torch.load(Llama2Loader.WEIGHTS_FILE, map_location="cpu")
         llama2_7b.load_state_dict(state_dict, assign=True)
 
         del state_dict
@@ -83,16 +83,15 @@ def main():
         ]
 
         llama2_7b.to(DEVICE)
-        output = llama2_7b.prompt(
+        llama2_7b.prompt(
             messages,
             max_new_tokens=100,
             temperature=0,
             apply_chat_template=True,
+            stream=True,
             debug=True,
             device=DEVICE,
-            stream=True,
         )
-        print(output)
 
 
 if __name__ == "__main__":
