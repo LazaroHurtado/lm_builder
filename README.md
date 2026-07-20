@@ -17,7 +17,7 @@ $ python3 ./examples/gpt2.py
 - Attention
     - ~~multi-headed attention~~
     - ~~grouped-query attention~~
-    - sliding window attention
+    - ~~sliding window attention~~
 - Caching
     - ~~kv cache~~
     - chunked kv cache
