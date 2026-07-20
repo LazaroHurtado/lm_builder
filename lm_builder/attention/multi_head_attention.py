@@ -123,7 +123,7 @@ class MultiHeadAttention(Attention):
                 k,
                 v,
                 attn_mask=(self.attention_mask[:, :, :T, :T] == 1),
-                dropout_p=self.attn_dropout.p,
+                dropout_p=self.attn_dropout.p if self.training else 0.0,
             )
         else:
             attn = self.attention(q, k, v)
