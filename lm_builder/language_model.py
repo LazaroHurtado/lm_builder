@@ -18,18 +18,30 @@ class LanguageModel(Transformer):
         top_k=None,
         max_new_tokens=20,
         temperature=1.0,
+        attention_mask=None,
         **kwargs,
     ):
         assert temperature >= 0, "Temperature must be non-negative"
         full_sequence = input_ids
+        full_attention_mask = attention_mask
+        if full_attention_mask is not None:
+            if full_attention_mask.shape != full_sequence.shape:
+                raise ValueError("Attention mask must match the input IDs shape.")
+            full_attention_mask = full_attention_mask.to(input_ids.device)
 
         for _ in range(max_new_tokens):
+            
+            model_input = full_sequence
+            model_attention_mask = full_attention_mask
             if full_sequence.shape[-1] > self.context_length:
                 model_input = full_sequence[:, -self.context_length :]
-            else:
-                model_input = full_sequence
+                model_attention_mask = (
+                    full_attention_mask[:, -self.context_length :]
+                    if full_attention_mask is not None
+                    else None
+                )
 
-            logits, _ = self(model_input)
+            logits, _ = self(model_input, attention_mask=model_attention_mask)
             logits = logits[:, -1, :]
 
             if temperature > 0:
@@ -45,6 +57,14 @@ class LanguageModel(Transformer):
                 next_id = torch.argmax(logits, dim=-1, keepdim=True)
 
             full_sequence = torch.cat((full_sequence, next_id), dim=1)
+            if full_attention_mask is not None:
+                full_attention_mask = torch.cat(
+                    (
+                        full_attention_mask,
+                        full_attention_mask.new_ones((next_id.size(0), 1)),
+                    ),
+                    dim=1,
+                )
 
             yield next_id
 
@@ -69,12 +89,16 @@ class LanguageModel(Transformer):
                 prompts, add_generation_prompt=True, tokenize=False
             )
 
-        input_ids = self.tokenizer(
-            prompts, return_tensors="pt", padding=True
-        ).input_ids.to(device)
+        tokenized_prompts = self.tokenizer(prompts, return_tensors="pt", padding=True)
+        input_ids = tokenized_prompts.input_ids.to(device)
+        attention_mask = tokenized_prompts.attention_mask.to(device)
 
         start = time.monotonic()
-        next_token_ids = self.generate(input_ids, **kwargs)
+        next_token_ids = self.generate(
+            input_ids,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
         output_ids = input_ids
         if stream:
             previous_text = self.tokenizer.decode(

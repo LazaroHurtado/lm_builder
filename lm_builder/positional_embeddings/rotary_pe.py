@@ -87,15 +87,25 @@ class RotaryPE(nn.Module):
         q: torch.Tensor,
         k: torch.Tensor,
         unsqueeze_dim=1,
+        position_ids=None,
     ):
         # q: (B, H, T, D)
         T = q.shape[2]
 
-        # Index into the cached tables
-        # self.cos_cached: (MaxT, D) -> (B, T, D) via slicing
-        cos = self.cos_cached[:T].unsqueeze(0).unsqueeze(unsqueeze_dim)
-        sin = self.sin_cached[:T].unsqueeze(0).unsqueeze(unsqueeze_dim)
+        if position_ids is None:
+            # Index into the cached tables
+            # self.cos_cached: (MaxT, D) -> (B, T, D) via slicing
+            cos = self.cos_cached[:T].unsqueeze(0).unsqueeze(unsqueeze_dim)
+            sin = self.sin_cached[:T].unsqueeze(0).unsqueeze(unsqueeze_dim)
+        else:
+            cos, sin = self._get_cos_sin_embeddings(
+                position_ids,
+                q.device,
+                unsqueeze_dim=unsqueeze_dim,
+            )
 
+        cos = cos.to(device=q.device, dtype=q.dtype)
+        sin = sin.to(device=q.device, dtype=q.dtype)
         q_embed = (q * cos) + (self.rotate_half(q) * sin)
         k_embed = (k * cos) + (self.rotate_half(k) * sin)
         return q_embed, k_embed

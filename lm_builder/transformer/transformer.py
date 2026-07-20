@@ -1,3 +1,4 @@
+import torch
 from torch import nn
 from torch.nn import functional as F
 
@@ -35,20 +36,38 @@ class Transformer(nn.Module):
 
         self.config = config
 
-    def forward(self, x, targets=None):
+    def forward(self, x, targets=None, attention_mask=None, position_ids=None):
         B, T = x.size()  # pylint: disable=invalid-name
         assert T <= self.context_length
+
+        expected_shape = (B, T)
+        if attention_mask is not None:
+            if attention_mask.shape != expected_shape:
+                raise ValueError("Attention mask must match the input IDs shape.")
+            attention_mask = attention_mask.to(device=x.device, dtype=bool)
+
+        if position_ids is not None:
+            if position_ids.shape != expected_shape:
+                raise ValueError("Position IDs must match the input IDs shape.")
+            position_ids = position_ids.to(device=x.device, dtype=torch.long)
+        elif attention_mask is not None:
+            position_ids = attention_mask.long().cumsum(dim=-1) - 1
+            position_ids.masked_fill_(~attention_mask, 0)
 
         # Token embedding layer
         x = self.transformer.wte(x)  # (B, T, C)
         if "wpe" in self.transformer:
             # Positional embedding layer
-            x = self.transformer.wpe(x)  # (1, T, C)
+            x = self.transformer.wpe(x, position_ids=position_ids)  # (1, T, C)
 
         x = self.transformer.dropout(x)  # (B, T, C)
 
         for block in self.transformer.blocks:
-            x = block(x)
+            x = block(
+                x,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+            )
         x = self.transformer.norm(x)
         # (B, T, C) -> (B, T, V)
         logits = self.lm_head(x)

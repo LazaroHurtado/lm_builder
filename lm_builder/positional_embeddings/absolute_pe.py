@@ -77,6 +77,11 @@ class AbsolutePE(nn.Module):
         # (2, T*C/2) -> (T*C/2, 2) -> (T*C) -> (T, C)
         return x.t().contiguous().view(*shape)
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor, position_ids=None):
         _, T, C = x.size()
-        return x + self.weight[None, :T, :C]
+        if position_ids is None:
+            positional_embedding = self.weight[None, :T, :C]
+        else:
+            positional_embedding = self.weight[position_ids, :C]
+
+        return x + positional_embedding

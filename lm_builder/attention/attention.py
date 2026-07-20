@@ -15,5 +15,9 @@ class Attention(nn.Module):
 
     @abstractmethod
     def attention(
-        self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        attention_mask=None,
     ): ...

@@ -1,11 +1,13 @@
 import pytest
 import torch
+from torch.nn import functional as F
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import (
     LlamaRotaryEmbedding,
     apply_rotary_pos_emb,
 )
 
+from lm_builder.attention import AttentionConfig, CausalMultiHeadAttention
 from lm_builder.positional_embeddings.rotary_pe import RotaryPE
 
 NUM_HEAD = 4
@@ -84,3 +86,32 @@ def test_rope(rope: RotaryPE, hf_rope: LlamaRotaryEmbedding):
 
     assert torch.allclose(q_rotary, q_hf_rotary, atol=1e-5)
     assert torch.allclose(k_rotary, k_hf_rotary, atol=1e-5)
+
+
+@pytest.mark.parametrize("use_scaled_dot_product_attention", [True, False])
+def test_rope_preserves_half_precision_with_position_ids(
+    use_scaled_dot_product_attention,
+):
+    attention = CausalMultiHeadAttention(
+        AttentionConfig(
+            context_length=SEQ_LEN,
+            embedding_dimension=HEAD_DIM,
+            num_heads=NUM_HEAD,
+            positional_embedding=RotaryPE,
+        )
+    ).half()
+    attention.has_flash_attn = use_scaled_dot_product_attention and hasattr(
+        F, "scaled_dot_product_attention"
+    )
+    inputs = torch.randn(2, SEQ_LEN, HEAD_DIM, dtype=torch.float16)
+    attention_mask = torch.ones(2, SEQ_LEN, dtype=torch.bool)
+    position_ids = torch.arange(SEQ_LEN).repeat(2, 1)
+
+    output = attention(
+        inputs,
+        attention_mask=attention_mask,
+        position_ids=position_ids,
+    )
+
+    assert output.dtype == torch.float16
+    assert torch.isfinite(output).all()

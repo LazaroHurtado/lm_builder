@@ -82,8 +82,49 @@ class MultiHeadAttention(Attention):
 
         return q_heads, k_heads, v_heads
 
-    def attention(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor):
+    def _build_attention_mask(
+        self,
+        attention_mask,
+        batch_size,
+        query_length,
+        key_length,
+    ):
+        base_mask = self.attention_mask[:, :, :query_length, :key_length] == 1
+        if attention_mask is None:
+            return base_mask
+
+        if attention_mask.shape != (batch_size, key_length):
+            raise ValueError("Attention mask must match the key sequence shape.")
+
+        key_padding_mask = attention_mask.to(
+            device=base_mask.device,
+            dtype=torch.bool,
+        )[:, None, None, :]
+        combined_mask = base_mask & key_padding_mask
+
+        # Left-padded query rows can have no valid keys. Their outputs are ignored,
+        # but keeping a causal row prevents all-masked softmax rows from producing NaNs.
+        return torch.where(
+            combined_mask.any(dim=-1, keepdim=True),
+            combined_mask,
+            base_mask,
+        )
+
+    def attention(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        attention_mask=None,
+    ):
         T = query.size(2)
+        if attention_mask is None:
+            attention_mask = self._build_attention_mask(
+                attention_mask=None,
+                batch_size=query.size(0),
+                query_length=T,
+                key_length=key.size(2),
+            )
 
         # (B, num_heads, T, head_dim) @ (B, num_heads, head_dim, T) -> (B, num_heads, T, T)
         scale = 1.0 / math.sqrt(key.size(dim=-1))
@@ -93,7 +134,7 @@ class MultiHeadAttention(Attention):
         # to zero we will replace the matrix's element at
         # that position with -inf. We use -inf so when we apply
         # softmax those elements will equal to 0.
-        attn = attn.masked_fill(self.attention_mask[:, :, :T, :T] == 0, float("-inf"))
+        attn = attn.masked_fill(~attention_mask, float("-inf"))
         attn = F.softmax(attn, dim=-1)
 
         attn = self.attn_dropout(attn)
@@ -101,7 +142,7 @@ class MultiHeadAttention(Attention):
         # (B, num_heads, T, T) x (B, num_heads, T, head_dim) -> (B, num_heads, T, head_dim)
         return attn @ value
 
-    def forward(self, x):
+    def forward(self, x, attention_mask=None, position_ids=None):
         # batch size, sequence length, embedding dimensionality.
         B, T, C = x.size()
 
@@ -115,18 +156,30 @@ class MultiHeadAttention(Attention):
         # (B, num_head, T, head_dim)
         q, k, v = self.get_heads(q, k, v)
         if self.has_positional_embedding:
-            q, k = self.pos_emb(q, k)
+            q, k = self.pos_emb(q, k, position_ids=position_ids)
+
+        combined_attention_mask = self._build_attention_mask(
+            attention_mask=attention_mask,
+            batch_size=B,
+            query_length=T,
+            key_length=k.size(2),
+        )
 
         if self.has_flash_attn:
             attn = F.scaled_dot_product_attention(  # pylint: disable=not-callable
                 q,
                 k,
                 v,
-                attn_mask=(self.attention_mask[:, :, :T, :T] == 1),
+                attn_mask=combined_attention_mask,
                 dropout_p=self.attn_dropout.p if self.training else 0.0,
             )
         else:
-            attn = self.attention(q, k, v)
+            attn = self.attention(
+                q,
+                k,
+                v,
+                attention_mask=combined_attention_mask,
+            )
 
         # Convert multi-headed shaped matrix back to original shape
         # (B, num_heads, T, head_dim) -> (B, T, num_heads, head_dim)
