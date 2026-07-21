@@ -20,12 +20,19 @@ def test_grouped_query_attention_shares_key_value_heads():
     original_key_heads = key.view(2, 4, 2, 2).transpose(1, 2)
     original_value_heads = value.view(2, 4, 2, 2).transpose(1, 2)
     assert query_heads.shape == (2, 4, 4, 2)
-    assert torch.equal(
+    assert torch.equal(key_heads, original_key_heads)
+    assert torch.equal(value_heads, original_value_heads)
+
+    repeated_key_heads, repeated_value_heads = attention._repeat_kv_heads(
         key_heads,
+        value_heads,
+    )
+    assert torch.equal(
+        repeated_key_heads,
         original_key_heads.repeat_interleave(2, dim=1),
     )
     assert torch.equal(
-        value_heads,
+        repeated_value_heads,
         original_value_heads.repeat_interleave(2, dim=1),
     )
 

@@ -38,6 +38,8 @@ class RecordingLanguageModel(LanguageModel):
         targets=None,
         attention_mask=None,
         position_ids=None,
+        *,
+        _kv_caches=None,
     ):
         self.attention_masks.append(attention_mask.clone())
         logits = torch.zeros(

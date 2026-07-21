@@ -3,6 +3,7 @@ import time
 import torch
 import torch.nn.functional as F
 
+from .inference import KVCache
 from .transformer import Transformer, TransformerConfig
 
 
@@ -10,6 +11,30 @@ class LanguageModel(Transformer):
     def __init__(self, config: TransformerConfig, tokenizer):
         super().__init__(config)
         self.tokenizer = tokenizer
+
+    def _prepare_generation_inputs(
+        self,
+        full_sequence,
+        full_attention_mask,
+        kv_caches,
+    ):
+        model_input = full_sequence
+        model_attention_mask = full_attention_mask
+
+        if full_sequence.shape[-1] > self.context_length:
+            model_input = full_sequence[:, -self.context_length :]
+            model_attention_mask = (
+                full_attention_mask[:, -self.context_length :]
+                if full_attention_mask is not None
+                else None
+            )
+            if kv_caches is not None:
+                for kv_cache in kv_caches:
+                    kv_cache.reset()
+        elif kv_caches is not None and kv_caches[0].sequence_length:
+            model_input = full_sequence[:, -1:]
+
+        return model_input, model_attention_mask
 
     @torch.inference_mode()
     def generate(
@@ -19,6 +44,7 @@ class LanguageModel(Transformer):
         max_new_tokens=20,
         temperature=1.0,
         attention_mask=None,
+        use_cache=True,
         **kwargs,
     ):
         assert temperature >= 0, "Temperature must be non-negative"
@@ -29,19 +55,25 @@ class LanguageModel(Transformer):
                 raise ValueError("Attention mask must match the input IDs shape.")
             full_attention_mask = full_attention_mask.to(input_ids.device)
 
-        for _ in range(max_new_tokens):
-            
-            model_input = full_sequence
-            model_attention_mask = full_attention_mask
-            if full_sequence.shape[-1] > self.context_length:
-                model_input = full_sequence[:, -self.context_length :]
-                model_attention_mask = (
-                    full_attention_mask[:, -self.context_length :]
-                    if full_attention_mask is not None
-                    else None
-                )
+        cache_enabled = use_cache and len(self.transformer.blocks) > 0
+        kv_caches = (
+            [KVCache(self.context_length) for _ in self.transformer.blocks]
+            if cache_enabled
+            else None
+        )
 
-            logits, _ = self(model_input, attention_mask=model_attention_mask)
+        for _ in range(max_new_tokens):
+            model_input, model_attention_mask = self._prepare_generation_inputs(
+                full_sequence,
+                full_attention_mask,
+                kv_caches,
+            )
+
+            logits, _ = self(
+                model_input,
+                attention_mask=model_attention_mask,
+                _kv_caches=kv_caches,
+            )
             logits = logits[:, -1, :]
 
             if temperature > 0:

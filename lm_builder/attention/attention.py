@@ -6,6 +6,15 @@ import torch.nn as nn
 
 class Attention(nn.Module):
     @abstractmethod
+    def forward(
+        self,
+        x: torch.Tensor,
+        attention_mask=None,
+        position_ids=None,
+        kv_cache=None,
+    ): ...
+
+    @abstractmethod
     def get_qkv(self, x: torch.Tensor): ...
 
     @abstractmethod

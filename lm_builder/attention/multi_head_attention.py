@@ -6,11 +6,13 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from ..inference import KVCache
 from .attention import Attention
 from .config import AttentionConfig
 
 
 class MultiHeadAttention(Attention):
+    supports_kv_cache = False
 
     def __init__(self, config: AttentionConfig):
         super().__init__()
@@ -69,8 +71,6 @@ class MultiHeadAttention(Attention):
     def get_heads(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor):
         B, T, _ = query.size()  # pylint: disable=invalid-name
 
-        # For the key and value matrices we might have hit the KV-Cache, so
-        # its sequence length might not be T which is why we do `.size(dim=1)`
         # (B, T, C) -> (B, T, num_head, head_dim) -> (B, num_head, T, head_dim)
         q_heads = query.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
         k_heads = key.view(B, key.size(dim=1), self.num_heads, self.head_dim).transpose(
@@ -82,6 +82,9 @@ class MultiHeadAttention(Attention):
 
         return q_heads, k_heads, v_heads
 
+    def _repeat_kv_heads(self, key: torch.Tensor, value: torch.Tensor):
+        return key, value
+
     def _build_attention_mask(
         self,
         attention_mask,
@@ -89,14 +92,32 @@ class MultiHeadAttention(Attention):
         query_length,
         key_length,
     ):
-        base_mask = self.attention_mask[:, :, :query_length, :key_length] == 1
+        if query_length > key_length:
+            raise ValueError("Query length cannot exceed key length.")
+
+        query_start = key_length - query_length
+        base_mask = (
+            self.attention_mask[
+                :,
+                :,
+                query_start : query_start + query_length,
+                :key_length,
+            ]
+            == 1
+        )
         if attention_mask is None:
             return base_mask
 
-        if attention_mask.shape != (batch_size, key_length):
-            raise ValueError("Attention mask must match the key sequence shape.")
+        if (
+            attention_mask.ndim != 2
+            or attention_mask.size(0) != batch_size
+            or attention_mask.size(1) < key_length
+        ):
+            raise ValueError(
+                "Attention mask must contain the complete key sequence shape."
+            )
 
-        key_padding_mask = attention_mask.to(
+        key_padding_mask = attention_mask[:, -key_length:].to(
             device=base_mask.device,
             dtype=torch.bool,
         )[:, None, None, :]
@@ -142,7 +163,19 @@ class MultiHeadAttention(Attention):
         # (B, num_heads, T, T) x (B, num_heads, T, head_dim) -> (B, num_heads, T, head_dim)
         return attn @ value
 
-    def forward(self, x, attention_mask=None, position_ids=None):
+    def forward(
+        self,
+        x,
+        attention_mask=None,
+        position_ids=None,
+        kv_cache: KVCache = None,
+    ):
+        if kv_cache is not None:
+            assert (
+                not self.training
+            ), "KV caching requires attention to be in eval mode."
+            assert self.supports_kv_cache, "KV caching requires causal attention."
+
         # batch size, sequence length, embedding dimensionality.
         B, T, C = x.size()
 
@@ -157,6 +190,11 @@ class MultiHeadAttention(Attention):
         q, k, v = self.get_heads(q, k, v)
         if self.has_positional_embedding:
             q, k = self.pos_emb(q, k, position_ids=position_ids)
+
+        if kv_cache is not None:
+            k, v = kv_cache.update(k, v)
+
+        k, v = self._repeat_kv_heads(k, v)
 
         combined_attention_mask = self._build_attention_mask(
             attention_mask=attention_mask,

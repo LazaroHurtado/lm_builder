@@ -7,6 +7,7 @@ from .multi_head_attention import MultiHeadAttention
 
 
 class CausalMultiHeadAttention(MultiHeadAttention):
+    supports_kv_cache = True
 
     def __init__(self, config: AttentionConfig):
         super().__init__(config)
@@ -20,8 +21,6 @@ class CausalMultiHeadAttention(MultiHeadAttention):
         # principle diagonal are zero with the same shape.
         self.register_buffer(
             "attention_mask",
-            torch.ones(self.context_len, self.context_len).tril()[
-                None, None, :, :
-            ],
+            torch.ones(self.context_len, self.context_len).tril()[None, None, :, :],
             persistent=False,
         )

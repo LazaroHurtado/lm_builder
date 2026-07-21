@@ -30,11 +30,9 @@ class GroupedQueryAttention(MultiQueryAttention):
         self.k_proj = nn.Linear(self.embedding_dim, self.kv_dim, bias=config.bias)
         self.v_proj = nn.Linear(self.embedding_dim, self.kv_dim, bias=config.bias)
 
-    def get_heads(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor):
-        q_heads, k_heads, v_heads = super().get_heads(query, key, value)
-
+    def _repeat_kv_heads(self, key: torch.Tensor, value: torch.Tensor):
         if 1 < self.kv_heads < self.num_heads:
-            k_heads = k_heads.repeat_interleave(self.shared_heads, dim=1)
-            v_heads = v_heads.repeat_interleave(self.shared_heads, dim=1)
+            key = key.repeat_interleave(self.shared_heads, dim=1)
+            value = value.repeat_interleave(self.shared_heads, dim=1)
 
-        return q_heads, k_heads, v_heads
+        return key, value

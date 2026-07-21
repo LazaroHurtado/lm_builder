@@ -9,7 +9,13 @@ from lm_builder import LanguageModel
 from lm_builder.transformer import TransformerConfig
 from lm_builder.utils import change_state_dict_names
 
-DEVICE = "cuda"
+
+def get_device():
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
 
 
 class GPT2Loader:
@@ -87,14 +93,30 @@ def main():
         del state_dict
         gc.collect()
 
-        gpt2_xl.to(DEVICE)
+        gpt2_xl.to(get_device())
+        prompt = "Claude Shannon, the"
+        generation_kwargs = {
+            "max_new_tokens": 200,
+            "temperature": 0,
+            "stream": True,
+            "debug": True,
+            "device": get_device(),
+        }
+
+        print("Generating with KV cache:")
+        print(prompt, end="", flush=True)
         gpt2_xl.prompt(
-            "Claude Shannon, the",
-            max_new_tokens=200,
-            temperature=0.9,
-            stream=True,
-            debug=True,
-            device=DEVICE,
+            prompt,
+            use_cache=True,
+            **generation_kwargs,
+        )
+
+        print("\nGenerating without KV cache:")
+        print(prompt, end="", flush=True)
+        gpt2_xl.prompt(
+            prompt,
+            use_cache=False,
+            **generation_kwargs,
         )
 
 

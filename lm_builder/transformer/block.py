@@ -18,11 +18,18 @@ class Block(nn.Module):
         self.ffn_norm = config.ffn_norm(self.embedding_dim, bias=config.norm_bias)
         self.ffn = config.ffn(config.ffn_config)
 
-    def forward(self, x: torch.Tensor, attention_mask=None, position_ids=None):
+    def forward(
+        self,
+        x: torch.Tensor,
+        attention_mask=None,
+        position_ids=None,
+        kv_cache=None,
+    ):
         x = x + self.attn(
             self.attn_norm(x),
             attention_mask=attention_mask,
             position_ids=position_ids,
+            kv_cache=kv_cache,
         )
         x = x + self.ffn(self.ffn_norm(x))
 

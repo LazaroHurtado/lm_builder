@@ -57,23 +57,81 @@ class Transformer(nn.Module):
             for layer_index in range(config.num_layers)
         ]
 
-    def forward(self, x, targets=None, attention_mask=None, position_ids=None):
-        B, T = x.size()  # pylint: disable=invalid-name
-        assert T <= self.context_length
+    def _get_cached_sequence_length(self, kv_caches):
+        if kv_caches is None:
+            return 0
+        if len(kv_caches) != len(self.transformer.blocks):
+            raise ValueError("A KV cache is required for each transformer block.")
 
-        expected_shape = (B, T)
-        if attention_mask is not None:
-            if attention_mask.shape != expected_shape:
-                raise ValueError("Attention mask must match the input IDs shape.")
-            attention_mask = attention_mask.to(device=x.device, dtype=bool)
+        cache_lengths = {cache.sequence_length for cache in kv_caches}
+        if len(cache_lengths) > 1:
+            raise ValueError("All transformer KV caches must have equal lengths.")
+
+        return cache_lengths.pop() if cache_lengths else 0
+
+    def _prepare_position_ids(
+        self,
+        x,
+        position_ids,
+        attention_mask,
+        cached_sequence_length,
+        kv_caches,
+    ):
+        batch_size, sequence_length = x.size()
+        expected_shape = (batch_size, sequence_length)
 
         if position_ids is not None:
             if position_ids.shape != expected_shape:
                 raise ValueError("Position IDs must match the input IDs shape.")
-            position_ids = position_ids.to(device=x.device, dtype=torch.long)
-        elif attention_mask is not None:
+            return position_ids.to(device=x.device, dtype=torch.long)
+
+        if attention_mask is not None:
             position_ids = attention_mask.long().cumsum(dim=-1) - 1
             position_ids.masked_fill_(~attention_mask, 0)
+            return position_ids[:, -sequence_length:]
+
+        if kv_caches is not None:
+            return torch.arange(
+                cached_sequence_length,
+                cached_sequence_length + sequence_length,
+                device=x.device,
+                dtype=torch.long,
+            ).expand(batch_size, -1)
+
+        return None
+
+    def forward(
+        self,
+        x,
+        targets=None,
+        attention_mask=None,
+        position_ids=None,
+        *,
+        _kv_caches=None,
+    ):
+        B, T = x.size()  # pylint: disable=invalid-name
+        assert T <= self.context_length
+
+        cached_sequence_length = self._get_cached_sequence_length(_kv_caches)
+        key_sequence_length = cached_sequence_length + T
+        if key_sequence_length > self.context_length:
+            raise ValueError("Input and KV cache exceed the model context length.")
+
+        expected_attention_shape = (B, key_sequence_length)
+        if attention_mask is not None:
+            if attention_mask.shape != expected_attention_shape:
+                raise ValueError(
+                    "Attention mask must match the complete key sequence shape."
+                )
+            attention_mask = attention_mask.to(device=x.device, dtype=bool)
+
+        position_ids = self._prepare_position_ids(
+            x,
+            position_ids,
+            attention_mask,
+            cached_sequence_length,
+            _kv_caches,
+        )
 
         # Token embedding layer
         x = self.transformer.wte(x)  # (B, T, C)
@@ -83,11 +141,13 @@ class Transformer(nn.Module):
 
         x = self.transformer.dropout(x)  # (B, T, C)
 
-        for block in self.transformer.blocks:
+        for layer_index, block in enumerate(self.transformer.blocks):
+            kv_cache = None if _kv_caches is None else _kv_caches[layer_index]
             x = block(
                 x,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
+                kv_cache=kv_cache,
             )
         x = self.transformer.norm(x)
         # (B, T, C) -> (B, T, V)

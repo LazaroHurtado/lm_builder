@@ -35,6 +35,21 @@ attention_config:
 
 Without `attention_ratio`, `attention` must be a single attention type.
 
+### KV-cached generation
+
+`LanguageModel.generate()` and `LanguageModel.prompt()` use an inference-only KV
+cache by default for causal attention models. The prompt is evaluated once, then
+only the newest token is evaluated until the configured context length is
+reached. The model must be in evaluation mode. Set `use_cache=False` to use
+full-sequence recomputation instead:
+
+```python
+output = model.prompt("Hello", use_cache=False)
+```
+
+When generation exceeds `context_length`, the cache is reset and the current
+context window is recomputed so positional embedding behavior remains unchanged.
+
 ### Todo
 
 - Add tests
@@ -45,7 +60,7 @@ Without `attention_ratio`, `attention` must be a single attention type.
 - Caching
     - ~~kv cache~~
     - chunked kv cache
-    - rolling buffer caching
+    - rolling buffer caching to preserve single-token decoding after context overflow
 - ~~Mixture of experts~~ (to be verified)
 - Positional embedding
     - ~~absolute p.e.~~
