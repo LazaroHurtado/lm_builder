@@ -13,7 +13,11 @@ class Transformer(nn.Module):
         self.embedding_dim = config.attention_config.embedding_dimension
         self.context_length = config.attention_config.context_length
 
-        blocks = [Block(config) for _ in range(config.num_layers)]
+        attention_types = self._get_attention_types(config)
+        blocks = [
+            Block(config, attention_type=attention_type)
+            for attention_type in attention_types
+        ]
 
         transformer_modules = dict(
             wte=config.token_embedding(config.vocab_size, self.embedding_dim),
@@ -35,6 +39,23 @@ class Transformer(nn.Module):
         )
 
         self.config = config
+
+    @staticmethod
+    def _get_attention_types(config):
+        attention_ratio = config.attention_config.get_attention_ratio()
+        if attention_ratio is None:
+            return [config.attention] * config.num_layers
+
+        attention_pattern = [
+            attention_type
+            for attention_type, layer_count in zip(config.attention, attention_ratio)
+            for _ in range(layer_count)
+        ]
+
+        return [
+            attention_pattern[layer_index % len(attention_pattern)]
+            for layer_index in range(config.num_layers)
+        ]
 
     def forward(self, x, targets=None, attention_mask=None, position_ids=None):
         B, T = x.size()  # pylint: disable=invalid-name

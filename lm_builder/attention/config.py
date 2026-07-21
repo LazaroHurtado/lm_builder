@@ -22,6 +22,33 @@ class AttentionConfig:
     positional_embedding: Optional[nn.Module] = None
     inv_freq: float = 10_000.0
     window_size: Optional[int] = None
+    attention_ratio: Optional[str] = None
+
+    def __post_init__(self):
+        self.get_attention_ratio()
+
+    def get_attention_ratio(self):
+        if self.attention_ratio is None:
+            return None
+
+        if not isinstance(self.attention_ratio, str):
+            raise ValueError(
+                "attention_ratio must contain at least two colon-separated "
+                "positive integers."
+            )
+
+        counts = self.attention_ratio.split(":")
+        if (
+            len(counts) < 2
+            or any(not count.isdecimal() for count in counts)
+            or any(int(count) <= 0 for count in counts)
+        ):
+            raise ValueError(
+                "attention_ratio must contain at least two colon-separated "
+                "positive integers."
+            )
+
+        return tuple(int(count) for count in counts)
 
     @staticmethod
     def from_yml(file: str) -> AttentionConfig:

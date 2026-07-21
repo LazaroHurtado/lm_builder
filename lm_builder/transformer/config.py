@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import List, Optional, Type, Union
 
 import yaml
 from torch import nn
@@ -16,7 +16,12 @@ class TransformerConfig:
     ffn_config: ffn.FeedForwardConfig
     vocab_size: int
     num_layers: int
-    attention: Optional[attention.Attention] = None
+    attention: Optional[
+        Union[
+            Type[attention.Attention],
+            List[Type[attention.Attention]],
+        ]
+    ] = None
     ffn: Optional[ffn.FeedForward] = None
     norm: nn.Module = nn.LayerNorm
     attn_norm: nn.Module = nn.LayerNorm
@@ -28,6 +33,22 @@ class TransformerConfig:
     norm_bias: bool = False
     dropout: float = 0.0
 
+    def __post_init__(self):
+        attention_ratio = self.attention_config.get_attention_ratio()
+        has_attention_list = isinstance(self.attention, list)
+
+        if has_attention_list:
+            if attention_ratio is None:
+                raise ValueError(
+                    "attention can only be a list when attention_ratio is set."
+                )
+            if len(self.attention) != len(attention_ratio):
+                raise ValueError(
+                    "attention list length must match attention_ratio component count."
+                )
+        elif attention_ratio is not None:
+            raise ValueError("attention must be a list when attention_ratio is set.")
+
     @staticmethod
     def from_yml(file: str) -> TransformerConfig:
         with open(file, "r", encoding="utf-8") as f:
@@ -36,10 +57,31 @@ class TransformerConfig:
             return TransformerConfig.build_config(config)
 
     @staticmethod
+    def _resolve_attention(config: dict) -> dict:
+        if not isinstance(config.get("attention"), list):
+            return module_has_attr(
+                config,
+                "attention",
+                primary_module=attention,
+                fallback_module=nn,
+            )
+
+        resolved_attention = []
+        for attention_name in config["attention"]:
+            resolved = module_has_attr(
+                {"attention": attention_name},
+                "attention",
+                primary_module=attention,
+                fallback_module=nn,
+            )
+            resolved_attention.append(resolved["attention"])
+
+        config["attention"] = resolved_attention
+        return config
+
+    @staticmethod
     def build_config(config: dict) -> TransformerConfig:
-        config = module_has_attr(
-            config, "attention", primary_module=attention, fallback_module=nn
-        )
+        config = TransformerConfig._resolve_attention(config)
 
         config = module_has_attr(config, "ffn", primary_module=ffn, fallback_module=nn)
 

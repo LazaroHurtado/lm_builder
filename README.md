@@ -11,6 +11,30 @@ $ source ./.venv/bin/activate
 $ python3 ./examples/gpt2.py
 ```
 
+### Sliding-window and global attention
+
+Set `attention` to an ordered list and `attention_ratio` to a quoted,
+colon-separated string of at least two positive integers. Each ratio component
+controls the corresponding attention type. For example, `"5:2:3"` repeats five
+sliding-window layers, two grouped-query layers, and three full
+causal-attention layers:
+
+```yaml
+attention:
+  - SlidingWindowAttention
+  - GroupedQueryAttention
+  - CausalMultiHeadAttention
+attention_config:
+  context_length: 16384
+  embedding_dimension: 4096
+  num_heads: 32
+  kv_heads: 8
+  window_size: 4096
+  attention_ratio: "5:2:3"
+```
+
+Without `attention_ratio`, `attention` must be a single attention type.
+
 ### Todo
 
 - Add tests
