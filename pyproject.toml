@@ -15,6 +15,8 @@ dependencies = [
     "torch",
     "tiktoken",
     "transformers",
+    "datasets>=3.1.0",
+    "tqdm>=4.67.1",
 ]
 
 [dependency-groups]

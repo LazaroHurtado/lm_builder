@@ -1,0 +1,23 @@
+attention: CausalMultiHeadAttention
+attention_config:
+  positional_embedding: RotaryPE
+  context_length: 256
+  embedding_dimension: 768
+  num_heads: 12
+  attn_dropout: 0.1
+  resid_dropout: 0.1
+  bias: True
+ffn: ClassicFeedForward
+ffn_config:
+  embedding_dimension: 768
+  intermediate_dimension: 3072
+  dropout: 0.1
+  activation_fn: GELU
+  bias: True
+attn_norm: LayerNorm
+ffn_norm: LayerNorm
+norm: LayerNorm
+vocab_size: 50257
+num_layers: 17
+norm_bias: True
+dropout: 0.1
