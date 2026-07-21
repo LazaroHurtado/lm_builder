@@ -69,12 +69,22 @@ class Transformer(nn.Module):
 
         return cache_lengths.pop() if cache_lengths else 0
 
+    def _get_cached_tokens_seen(self, kv_caches):
+        if kv_caches is None:
+            return 0
+
+        token_counts = {cache.tokens_seen for cache in kv_caches}
+        if len(token_counts) > 1:
+            raise ValueError("All transformer KV caches must have equal token counts.")
+
+        return token_counts.pop() if token_counts else 0
+
     def _prepare_position_ids(
         self,
         x,
         position_ids,
         attention_mask,
-        cached_sequence_length,
+        cached_tokens_seen,
         kv_caches,
     ):
         batch_size, sequence_length = x.size()
@@ -92,8 +102,8 @@ class Transformer(nn.Module):
 
         if kv_caches is not None:
             return torch.arange(
-                cached_sequence_length,
-                cached_sequence_length + sequence_length,
+                cached_tokens_seen,
+                cached_tokens_seen + sequence_length,
                 device=x.device,
                 dtype=torch.long,
             ).expand(batch_size, -1)
@@ -113,15 +123,20 @@ class Transformer(nn.Module):
         assert T <= self.context_length
 
         cached_sequence_length = self._get_cached_sequence_length(_kv_caches)
-        key_sequence_length = cached_sequence_length + T
-        if key_sequence_length > self.context_length:
-            raise ValueError("Input and KV cache exceed the model context length.")
+        cached_tokens_seen = self._get_cached_tokens_seen(_kv_caches)
+        key_sequence_length = min(
+            cached_sequence_length + T,
+            self.context_length,
+        )
 
-        expected_attention_shape = (B, key_sequence_length)
         if attention_mask is not None:
-            if attention_mask.shape != expected_attention_shape:
+            if (
+                attention_mask.ndim != 2
+                or attention_mask.size(0) != B
+                or attention_mask.size(1) < key_sequence_length
+            ):
                 raise ValueError(
-                    "Attention mask must match the complete key sequence shape."
+                    "Attention mask must contain the complete key sequence shape."
                 )
             attention_mask = attention_mask.to(device=x.device, dtype=bool)
 
@@ -129,7 +144,7 @@ class Transformer(nn.Module):
             x,
             position_ids,
             attention_mask,
-            cached_sequence_length,
+            cached_tokens_seen,
             _kv_caches,
         )
 

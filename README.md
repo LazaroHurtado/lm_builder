@@ -39,16 +39,21 @@ Without `attention_ratio`, `attention` must be a single attention type.
 
 `LanguageModel.generate()` and `LanguageModel.prompt()` use an inference-only KV
 cache by default for causal attention models. The prompt is evaluated once, then
-only the newest token is evaluated until the configured context length is
-reached. The model must be in evaluation mode. Set `use_cache=False` to use
-full-sequence recomputation instead:
+only the newest token is evaluated. The model must be in evaluation mode. Set
+`use_cache=False` to use full-sequence recomputation instead:
 
 ```python
 output = model.prompt("Hello", use_cache=False)
 ```
 
-When generation exceeds `context_length`, the cache is reset and the current
-context window is recomputed so positional embedding behavior remains unchanged.
+For rotary or no positional embeddings, the cache evicts its oldest key/value
+entry after `context_length` and continues single-token decoding. Retained cached
+states preserve information from tokens that have since been evicted, so output
+after overflow can differ from uncached sliding-window recomputation.
+
+Models with absolute input positional embeddings reset the cache and recompute
+the current context window after overflow because cached states cannot be safely
+reindexed.
 
 ### Todo
 
@@ -60,7 +65,7 @@ context window is recomputed so positional embedding behavior remains unchanged.
 - Caching
     - ~~kv cache~~
     - chunked kv cache
-    - rolling buffer caching to preserve single-token decoding after context overflow
+    - ~~rolling buffer caching after context overflow~~
 - ~~Mixture of experts~~ (to be verified)
 - Positional embedding
     - ~~absolute p.e.~~

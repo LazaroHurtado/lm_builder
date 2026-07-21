@@ -21,18 +21,31 @@ class LanguageModel(Transformer):
         model_input = full_sequence
         model_attention_mask = full_attention_mask
 
-        if full_sequence.shape[-1] > self.context_length:
+        cache_is_populated = kv_caches is not None and kv_caches[0].sequence_length > 0
+        # Absolute input embeddings cannot be reindexed without recomputing the window.
+        # For example, if our context length is 4 tokens; A, B, C, D
+        # then they will be assigned position ids 0, 1, 2, 3 respectively.
+        # Then, when we go to compute the new next token E we are forced to re-use
+        # B, C, D with positions ids 1, 2, 3. So to be correct E must take position id 4.
+        # The problem is that our positional embedding table is only of size context_length,
+        # and id 4 does not exist when our context length is 4, only ids 0, 1, 2, 3 exist.
+        # For this reason we cannot roll the kv cache once it exceeds the context_length.
+        can_roll_cache = (
+            kv_caches is not None and self.config.positional_embedding is None
+        )
+
+        if cache_is_populated and (
+            can_roll_cache or full_sequence.shape[-1] <= self.context_length
+        ):
+            model_input = full_sequence[:, -1:]
+        elif full_sequence.shape[-1] > self.context_length:
             model_input = full_sequence[:, -self.context_length :]
-            model_attention_mask = (
-                full_attention_mask[:, -self.context_length :]
-                if full_attention_mask is not None
-                else None
-            )
+            if full_attention_mask is not None and not can_roll_cache:
+                model_attention_mask = full_attention_mask[:, -self.context_length :]
+
             if kv_caches is not None:
                 for kv_cache in kv_caches:
                     kv_cache.reset()
-        elif kv_caches is not None and kv_caches[0].sequence_length:
-            model_input = full_sequence[:, -1:]
 
         return model_input, model_attention_mask
 

@@ -11,16 +11,22 @@ class KVCache:
         self.v = None
         self.context_length = context_length
         self._sequence_length = 0
+        self._tokens_seen = 0
 
     @property
     def sequence_length(self):
         return self._sequence_length
+
+    @property
+    def tokens_seen(self):
+        return self._tokens_seen
 
     def __len__(self):
         return self.sequence_length
 
     def reset(self):
         self._sequence_length = 0
+        self._tokens_seen = 0
 
     def _storage_matches(self, storage, tensor):
         return (
@@ -58,6 +64,17 @@ class KVCache:
             v.size(3),
         )
 
+    def _shift_left(self, positions):
+        retained_length = self.sequence_length - positions
+        if retained_length:
+            self.k[:, :, :retained_length].copy_(
+                self.k[:, :, positions : self.sequence_length].clone()
+            )
+            self.v[:, :, :retained_length].copy_(
+                self.v[:, :, positions : self.sequence_length].clone()
+            )
+        return retained_length
+
     def update(self, k, v):
         if k.ndim != 4 or v.ndim != 4:
             raise ValueError("Cached keys and values must be four-dimensional.")
@@ -68,17 +85,23 @@ class KVCache:
         if k.device != v.device or k.dtype != v.dtype:
             raise ValueError("Cached keys and values must share device and dtype.")
 
-        next_sequence_length = self.sequence_length + k.size(2)
-        if next_sequence_length > self.context_length:
-            raise ValueError("KV cache capacity exceeded; reset before updating.")
+        incoming_length = k.size(2)
+        next_sequence_length = self.sequence_length + incoming_length
+        if next_sequence_length > self.context_length and incoming_length != 1:
+            raise ValueError(
+                "Rolling KV cache overflow only supports single-token updates."
+            )
 
         self._ensure_storage(k, v)
-        start = self.sequence_length
-        self.k[:, :, start:next_sequence_length].copy_(k)
-        self.v[:, :, start:next_sequence_length].copy_(v)
-        self._sequence_length = next_sequence_length
+        overflow = max(0, next_sequence_length - self.context_length)
+        start = self._shift_left(overflow) if overflow else self.sequence_length
+        end = start + incoming_length
+        self.k[:, :, start:end].copy_(k)
+        self.v[:, :, start:end].copy_(v)
+        self._sequence_length = min(next_sequence_length, self.context_length)
+        self._tokens_seen += incoming_length
 
         return (
-            self.k[:, :, :next_sequence_length],
-            self.v[:, :, :next_sequence_length],
+            self.k[:, :, : self.sequence_length],
+            self.v[:, :, : self.sequence_length],
         )
