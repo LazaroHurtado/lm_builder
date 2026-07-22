@@ -22,11 +22,11 @@ class FeedForward(nn.Module):
 
         self.config = config
 
-    def forward(self, x):
+    def forward(self, x, *args, **kwargs):  # pylint: disable=unused-argument
         out1 = self.up_proj(x)
         out2 = self.gate_proj(x)
 
         x = out1 * self.activation_fn(out2)
 
         out3 = self.down_proj(x)
-        return self.dropout(out3)
+        return self.dropout(out3), None

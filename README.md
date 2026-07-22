@@ -45,7 +45,7 @@ resolved `AttentionConfig` for each transformer layer.
 
 ### Mixture-of-experts feed-forward layers
 
-Select `MixtureOfExperts` as the feed-forward type and configure at least two
+Select `MixtureOfExperts` as the feed-forward type and configure one or more
 experts per token:
 
 ```yaml
@@ -57,9 +57,23 @@ ffn_config:
   top_k: 2
 ```
 
-`num_experts` must be positive and `top_k` must be between `2` and
-`num_experts`. Top-1 routing is intentionally unavailable until routing-loss
-support is added.
+`num_experts` must be positive and `top_k` must be between `1` and
+`num_experts`.
+
+Transformer forward passes return cross-entropy and the mean routing loss
+across MoE layers separately. Cross-entropy is available when targets are
+provided. Routing loss is computed in training mode and is `None` in evaluation
+mode. Combine the losses with a coefficient chosen for the training run:
+
+```python
+logits, cross_entropy_loss, routing_loss = model(input_ids, targets)
+loss = cross_entropy_loss
+if routing_loss is not None:
+    loss = loss + 0.01 * routing_loss
+```
+
+Top-1 routing depends on this auxiliary loss because its selected expert weight
+is always one and therefore receives no routing gradient from cross-entropy.
 
 ### KV-cached generation
 

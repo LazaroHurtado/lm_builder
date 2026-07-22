@@ -95,7 +95,7 @@ class Transformer(nn.Module):
 
         return None
 
-    def forward(
+    def forward(  # pylint: disable=too-many-locals
         self,
         x,
         targets=None,
@@ -141,24 +141,31 @@ class Transformer(nn.Module):
 
         x = self.transformer.dropout(x)  # (B, T, C)
 
+        routing_losses = []
         for layer_index, block in enumerate(self.transformer.blocks):
             kv_cache = None if _kv_caches is None else _kv_caches[layer_index]
-            x = block(
+            x, routing_loss = block(
                 x,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
                 kv_cache=kv_cache,
             )
+            if routing_loss is not None:
+                routing_losses.append(routing_loss)
         x = self.transformer.norm(x)
         # (B, T, C) -> (B, T, V)
         logits = self.lm_head(x)
 
-        loss = None
+        cross_entropy_loss = None
         if targets is not None:
-            loss = F.cross_entropy(
+            cross_entropy_loss = F.cross_entropy(
                 logits.reshape(-1, logits.size(-1)),
                 targets.reshape(-1),
                 ignore_index=-1,
             )
 
-        return logits, loss
+        routing_loss = None
+        if routing_losses:
+            routing_loss = torch.stack(routing_losses).mean()
+
+        return logits, cross_entropy_loss, routing_loss

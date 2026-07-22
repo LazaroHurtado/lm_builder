@@ -35,6 +35,10 @@ class Block(nn.Module):
             position_ids=position_ids,
             kv_cache=kv_cache,
         )
-        x = x + self.ffn(self.ffn_norm(x))
+        ffn_out, routing_loss = self.ffn(
+            self.ffn_norm(x),
+            token_mask=attention_mask,
+        )
+        x = x + ffn_out
 
-        return x
+        return x, routing_loss

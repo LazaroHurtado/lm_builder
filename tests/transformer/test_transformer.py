@@ -44,7 +44,7 @@ def test_forward_computes_cross_entropy_per_token():
     input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
     targets = torch.tensor([[2, 3, -1], [5, 6, 7]])
 
-    logits, loss = model(input_ids, targets)
+    logits, loss, routing_loss = model(input_ids, targets)
 
     expected_loss = F.cross_entropy(
         logits.reshape(-1, logits.size(-1)),
@@ -54,6 +54,7 @@ def test_forward_computes_cross_entropy_per_token():
     assert loss is not None
     assert loss.ndim == 0
     assert torch.allclose(loss, expected_loss)
+    assert routing_loss is None
 
     loss.backward()
     assert model.lm_head.weight.grad is not None
@@ -222,8 +223,8 @@ def test_left_padding_does_not_change_content_logits(
     padded_attention_mask = torch.tensor([[0, 0, 1, 1], [1, 1, 1, 1]])
 
     with torch.no_grad():
-        logits, _ = model(input_ids, attention_mask=attention_mask)
-        padded_logits, _ = model(
+        logits, _, _ = model(input_ids, attention_mask=attention_mask)
+        padded_logits, _, _ = model(
             padded_input_ids,
             attention_mask=padded_attention_mask,
         )

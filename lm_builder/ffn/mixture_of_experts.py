@@ -16,16 +16,12 @@ class MixtureOfExperts(nn.Module):
             )
         if not is_positive_integer(config.top_k):
             raise ValueError(
-                "top_k must be an integer between 2 and num_experts "
+                "top_k must be an integer between 1 and num_experts "
                 "for MixtureOfExperts."
-            )
-        if config.top_k == 1:
-            raise ValueError(
-                "MixtureOfExperts does not support top_k=1 without routing loss."
             )
         if config.top_k > config.num_experts:
             raise ValueError(
-                "top_k must be an integer between 2 and num_experts "
+                "top_k must be an integer between 1 and num_experts "
                 "for MixtureOfExperts."
             )
 
@@ -49,7 +45,8 @@ class MixtureOfExperts(nn.Module):
     def _dispatch_all(self, x, expert_probs):
         out = torch.zeros_like(x)
         for i, expert in enumerate(self.experts):
-            expert_out = expert(x).to(out.dtype)
+            expert_out, _ = expert(x)
+            expert_out = expert_out.to(out.dtype)
             expert_weights = expert_probs[:, i, None].to(out.dtype)
             out.add_(expert_out * expert_weights)
 
@@ -77,7 +74,64 @@ class MixtureOfExperts(nn.Module):
 
         return expert_assignments, assignment_order
 
-    def forward(self, x):  # pylint: disable=too-many-locals
+    def _get_routing_loss(
+        self,
+        routing_logits,
+        expert_indices,
+        token_mask=None,
+    ):
+        if not self.training:
+            return None
+
+        router_probs = routing_logits.softmax(dim=-1, dtype=torch.float32)
+        if token_mask is not None:
+            token_mask = token_mask.reshape(-1).to(
+                device=routing_logits.device,
+                dtype=router_probs.dtype,
+            )
+            if token_mask.numel() != routing_logits.size(0):
+                raise ValueError(
+                    "Routing token mask must match the number of input tokens."
+                )
+
+        if routing_logits.size(0) == 0:
+            return routing_logits.float().sum()
+
+        if token_mask is None:
+            assignment_weights = router_probs.new_ones(expert_indices.numel())
+            valid_token_count = routing_logits.size(0)
+            router_prob_per_expert = router_probs.mean(dim=0)
+        else:
+            valid_token_count = token_mask.sum().clamp_min(1.0)
+            assignment_weights = (
+                token_mask[:, None].expand(-1, expert_indices.size(1)).reshape(-1)
+            )
+            router_prob_per_expert = (router_probs * token_mask[:, None]).sum(
+                dim=0
+            ) / valid_token_count
+
+        tokens_per_expert = router_probs.new_zeros(self.num_experts)
+        tokens_per_expert.index_add_(
+            0,
+            expert_indices.reshape(-1),
+            assignment_weights,
+        )
+        tokens_per_expert = tokens_per_expert / valid_token_count
+
+        # This is the main logic that measures how balanced our expert routing gate is.
+        # We can see that this loss is minimized only when the router probabilities are uniform across all experts.
+        # Re-written, this is saying N_e * \sum_{i=1}^{N_e} (T_i / T)*(P_i / T),
+        # where N_e is the number of experts, T_i is the number of tokens assigned to expert i, T is the valid token count,
+        # and P_i is the router probability for expert i.
+        # Only when the routing is uniform will T_i = T / N_e and P_i = 1 / N_e, leading to
+        # N_e * (N_e * (1 / N_e^2)) = 1, which is the minimum value for this loss.
+        return self.num_experts * torch.sum(tokens_per_expert * router_prob_per_expert)
+
+    def forward(  # pylint: disable=too-many-locals
+        self,
+        x,
+        token_mask=None,  # token mask is needed to know which tokens are valid for routing loss calculation (padding tokens should not contribute to the routing loss)
+    ):
         if x.ndim == 0:
             raise ValueError("MixtureOfExperts input must have at least one dimension.")
         if x.shape[-1] != self.embedding_dim:
@@ -89,22 +143,29 @@ class MixtureOfExperts(nn.Module):
         orig_shape = x.shape
         # (B, T, C) -> (B*T, C)
         x = x.reshape(-1, self.embedding_dim)
-        if x.numel() == 0:
-            return x.reshape(*orig_shape)
 
         # (B*T, C) -> (B*T, num_experts)
         routing_logits = self.router(x)
-        if self.top_k == self.num_experts:
-            expert_probs = routing_logits.softmax(dim=-1)
-            out = self._dispatch_all(x, expert_probs)
-            # (B*T, C) -> (B, T, C)
-            return out.reshape(*orig_shape)
 
         # The top-k routing logic comes from here:
         #   https://github.com/dzhulgakov/llama-mistral/blob/main/llama/model.py#L350
         # Comments and explanations are my own
         # (B*T, num_experts) -> (B*T, top_k)
         expert_logits, expert_indices = routing_logits.topk(self.top_k, dim=-1)
+        routing_loss = self._get_routing_loss(
+            routing_logits,
+            expert_indices,
+            token_mask,
+        )
+        if x.numel() == 0:
+            return x.reshape(*orig_shape), routing_loss
+
+        if self.top_k == self.num_experts:
+            expert_probs = routing_logits.softmax(dim=-1)
+            out = self._dispatch_all(x, expert_probs)
+            # (B*T, C) -> (B, T, C)
+            return out.reshape(*orig_shape), routing_loss
+
         expert_probs = expert_logits.softmax(dim=-1).reshape(-1)
         expert_indices = expert_indices.reshape(-1)
 
@@ -140,7 +201,8 @@ class MixtureOfExperts(nn.Module):
                 rounding_mode="floor",
             )
 
-            expert_out = expert(x.index_select(0, token_indices)).to(out.dtype)
+            expert_out, _ = expert(x.index_select(0, token_indices))
+            expert_out = expert_out.to(out.dtype)
             # So far we have only pass the tokens through each expert's linear layer
             # we still have to multiply it by their weights!
             expert_weights = (
@@ -155,4 +217,4 @@ class MixtureOfExperts(nn.Module):
             assignment_offset += assignment_count
 
         # (B*T, C) -> (B, T, C)
-        return out.reshape(*orig_shape)
+        return out.reshape(*orig_shape), routing_loss

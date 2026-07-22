@@ -82,7 +82,7 @@ class LanguageModel(Transformer):
                 kv_caches,
             )
 
-            logits, _ = self(
+            logits, _, _ = self(
                 model_input,
                 attention_mask=model_attention_mask,
                 _kv_caches=kv_caches,

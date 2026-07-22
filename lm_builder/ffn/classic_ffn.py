@@ -19,11 +19,11 @@ class ClassicFeedForward(nn.Module):
 
         self.config = config
 
-    def forward(self, x):
+    def forward(self, x, *args, **kwargs):  # pylint: disable=unused-argument
         x = self.up_proj(x)
         x = self.activation_fn(x)
 
         x = self.down_proj(x)
         x = self.dropout(x)
 
-        return x
+        return x, None

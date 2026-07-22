@@ -50,7 +50,7 @@ class RecordingLanguageModel(LanguageModel):
             device=x.device,
         )
         logits[..., 1] = 1
-        return logits, None
+        return logits, None, None
 
 
 def test_prompt_passes_and_extends_tokenizer_attention_mask():

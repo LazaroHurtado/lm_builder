@@ -103,7 +103,7 @@ def test_cached_decode_matches_full_forward(
     kv_caches = [KVCache(model.context_length) for _ in model.transformer.blocks]
 
     with torch.inference_mode():
-        full_logits, _ = model(input_ids, attention_mask=attention_mask)
+        full_logits, _, _ = model(input_ids, attention_mask=attention_mask)
         model(
             input_ids[:, :-1],
             attention_mask=(
@@ -111,7 +111,7 @@ def test_cached_decode_matches_full_forward(
             ),
             _kv_caches=kv_caches,
         )
-        cached_logits, _ = model(
+        cached_logits, _, _ = model(
             input_ids[:, -1:],
             attention_mask=attention_mask,
             _kv_caches=kv_caches,
