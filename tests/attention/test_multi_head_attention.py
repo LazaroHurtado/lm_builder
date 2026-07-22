@@ -97,6 +97,8 @@ def test_attention_uses_one_equivalent_qkv_projection(
     assert not hasattr(attention, "q_proj")
     assert not hasattr(attention, "k_proj")
     assert not hasattr(attention, "v_proj")
-    assert torch.allclose(query, query_projection(inputs))
-    assert torch.allclose(key, key_projection(inputs))
-    assert torch.allclose(value, value_projection(inputs))
+
+    # Fused and separate GEMMs can accumulate float32 values differently.
+    torch.testing.assert_close(query, query_projection(inputs), rtol=1e-5, atol=1e-6)
+    torch.testing.assert_close(key, key_projection(inputs), rtol=1e-5, atol=1e-6)
+    torch.testing.assert_close(value, value_projection(inputs), rtol=1e-5, atol=1e-6)
