@@ -34,13 +34,20 @@ class Transformer(nn.Module):
             )
 
         self.transformer = nn.ModuleDict(transformer_modules)
-        # In reality this is just the wte weights but transposed so we can map
-        # from embedding to vocabulary
         self.lm_head = nn.Linear(
             self.embedding_dim, config.vocab_size, bias=config.bias
         )
 
         self.config = config
+        if config.tie_word_embeddings:
+            self._tie_word_embeddings()
+            # Sometimes we build the model on meta device to save space,
+            # so to not double the lm_head and wpe parameters we need to tie
+            # them again after loading the state dict
+            self.register_load_state_dict_post_hook(self._tie_word_embeddings)
+
+    def _tie_word_embeddings(self, *args, **kwargs):  # pylint: disable=unused-argument
+        self.lm_head.weight = self.transformer.wte.weight
 
     def _get_cached_sequence_length(self, kv_caches):
         if kv_caches is None:

@@ -22,6 +22,28 @@ def build_attention_configs(num_layers=1, **kwargs):
     ]
 
 
+def build_transformer(tie_word_embeddings=False):
+    return Transformer(
+        TransformerConfig(
+            embedding_dimension=8,
+            context_length=4,
+            attention_config=build_attention_configs(
+                context_length=4,
+                embedding_dimension=8,
+                num_heads=2,
+            ),
+            ffn_config=FeedForwardConfig(
+                embedding_dimension=8,
+                intermediate_dimension=16,
+                ffn_type=FeedForward,
+            ),
+            vocab_size=10,
+            num_layers=1,
+            tie_word_embeddings=tie_word_embeddings,
+        )
+    )
+
+
 def test_forward_computes_cross_entropy_per_token():
     model = Transformer(
         TransformerConfig(
@@ -98,6 +120,7 @@ def test_transformer_builds_self_contained_branch_configs():
             },
             "vocab_size": 10,
             "num_layers": 1,
+            "tie_word_embeddings": True,
         }
     )
 
@@ -115,6 +138,52 @@ def test_transformer_builds_self_contained_branch_configs():
     assert block.ffn_norm.eps == 2e-5
     assert isinstance(model.transformer.norm, torch.nn.LayerNorm)
     assert model.transformer.norm.eps == 3e-5
+    assert config.tie_word_embeddings
+    assert model.lm_head.weight is model.transformer.wte.weight
+
+
+def test_tied_word_embeddings_share_parameters_gradients_and_state():
+    model = build_transformer(tie_word_embeddings=True)
+    shared_weight = model.transformer.wte.weight
+    _, loss, _ = model(
+        torch.tensor([[1, 2, 3]]),
+        targets=torch.tensor([[2, 3, 4]]),
+    )
+
+    loss.backward()
+    state_dict = model.state_dict()
+
+    assert model.lm_head.weight is shared_weight
+    assert model.lm_head.weight.grad is shared_weight.grad
+    assert shared_weight.grad.abs().sum() > 0
+    assert sum(parameter is shared_weight for parameter in model.parameters()) == 1
+    assert (
+        state_dict["transformer.wte.weight"].data_ptr()
+        == state_dict["lm_head.weight"].data_ptr()
+    )
+
+
+def test_word_embeddings_are_untied_by_default():
+    model = build_transformer()
+
+    assert not model.config.tie_word_embeddings
+    assert model.lm_head.weight is not model.transformer.wte.weight
+    assert model.lm_head.weight.data_ptr() != model.transformer.wte.weight.data_ptr()
+
+
+def test_tied_word_embeddings_remain_tied_after_assigned_state_load():
+    source = build_transformer(tie_word_embeddings=True)
+    with torch.no_grad():
+        source.transformer.wte.weight.fill_(2.5)
+
+    model = build_transformer(tie_word_embeddings=True).to("meta")
+    model.load_state_dict(source.state_dict(), assign=True)
+
+    assert model.lm_head.weight is model.transformer.wte.weight
+    assert torch.equal(
+        model.transformer.wte.weight,
+        torch.full_like(model.transformer.wte.weight, 2.5),
+    )
 
 
 def test_feed_forward_config_requires_type():
@@ -160,16 +229,17 @@ def test_transformer_requires_one_attention_config_per_layer():
 
 
 @pytest.mark.parametrize(
-    ("config_path", "expected_layers"),
+    ("config_path", "expected_layers", "expected_tied_embeddings"),
     [
-        ("examples/gpt2_xl.yml", 48),
-        ("examples/llama2_7b_chat.yml", 32),
-        ("examples/tinystories_200m.yml", 17),
+        ("examples/gpt2_xl.yml", 48, True),
+        ("examples/llama2_7b_chat.yml", 32, False),
+        ("examples/tinystories_200m.yml", 17, False),
     ],
 )
 def test_example_configs_use_resolved_module_configs(
     config_path,
     expected_layers,
+    expected_tied_embeddings,
 ):
     config = TransformerConfig.from_yml(config_path)
 
@@ -185,6 +255,7 @@ def test_example_configs_use_resolved_module_configs(
     )
     assert config.ffn_config.embedding_dimension == config.embedding_dimension
     assert config.ffn_config.ffn_type is not None
+    assert config.tie_word_embeddings is expected_tied_embeddings
 
 
 @pytest.mark.parametrize("position_type", ["absolute", "rotary"])

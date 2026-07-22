@@ -52,6 +52,21 @@ resolved `AttentionConfig` for each transformer layer.
 caching, and GQA/MQA key-value head sharing. Values are not normalized. Omit
 `qk_norm` to preserve the original attention behavior and parameter layout.
 
+### Tied input and output embeddings
+
+Set `tie_word_embeddings: true` at the model level to share the token embedding
+weight with the language-model output projection:
+
+```yaml
+embedding_dimension: 4096
+vocab_size: 32000
+tie_word_embeddings: true
+```
+
+Both modules reference the same `Parameter`, so gradients and optimizer updates
+remain shared. The LM-head bias, when enabled, remains independent. The option
+defaults to `false`.
+
 ### Mixture-of-experts feed-forward layers
 
 Select `MixtureOfExperts` as the feed-forward type and configure one or more

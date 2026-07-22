@@ -25,5 +25,6 @@ norm:
   bias: true
 bias: false
 dropout: 0.1
+tie_word_embeddings: true
 vocab_size: 50257
 num_layers: 48

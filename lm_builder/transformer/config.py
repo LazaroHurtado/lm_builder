@@ -25,6 +25,7 @@ class TransformerConfig:
     inv_freq: float = 10_000.0
     bias: bool = False
     dropout: float = 0.0
+    tie_word_embeddings: bool = False
 
     def __post_init__(self):
         if not is_positive_integer(self.embedding_dimension):
