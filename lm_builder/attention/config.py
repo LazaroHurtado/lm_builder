@@ -41,15 +41,22 @@ def _merge_layer_config(shared_config, layer):
 
     layer = dict(layer)
     merged_config = dict(shared_config)
-    if "norm" in layer:
-        shared_norm = shared_config.get("norm", {})
-        layer_norm = layer.pop("norm", {})
+    for norm_name in ("norm", "qk_norm"):
+        if norm_name not in layer:
+            continue
+
+        layer_norm = layer.pop(norm_name)
+        if norm_name == "qk_norm" and layer_norm is None:
+            merged_config[norm_name] = None
+            continue
+
+        shared_norm = shared_config.get(norm_name, {}) or {}
         if not isinstance(shared_norm, dict) or not isinstance(layer_norm, dict):
-            raise TypeError("Attention norm overrides must be mappings.")
+            raise TypeError(f"Attention {norm_name} overrides must be mappings.")
 
         merged_norm = dict(shared_norm)
         merged_norm.update(layer_norm)
-        merged_config["norm"] = merged_norm
+        merged_config[norm_name] = merged_norm
 
     merged_config.update(layer)
     return merged_config
@@ -69,6 +76,7 @@ class AttentionConfig:
     positional_embedding: Optional[Type[nn.Module]] = None
     inv_freq: float = 10_000.0
     norm: NormalizerConfig = field(default_factory=NormalizerConfig)
+    qk_norm: Optional[NormalizerConfig] = None
 
     def __post_init__(self):
         if self.attention_type is None:
@@ -80,6 +88,7 @@ class AttentionConfig:
         return replace(
             self,
             norm=self.norm.clone(),
+            qk_norm=None if self.qk_norm is None else self.qk_norm.clone(),
         )
 
     @staticmethod
@@ -119,6 +128,8 @@ class AttentionConfig:
             config, "positional_embedding", positional_embeddings, nn
         )
         config["norm"] = NormalizerConfig.build_config(config.get("norm"))
+        if config.get("qk_norm") is not None:
+            config["qk_norm"] = NormalizerConfig.build_config(config["qk_norm"])
 
         config = _filter_config_fields(config, AttentionConfig)
 

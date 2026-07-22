@@ -7,6 +7,7 @@ from lm_builder.attention import (
     GroupedQueryAttention,
     MultiHeadAttention,
 )
+from lm_builder.normalizers import RMSNorm
 
 
 def build_attention_configs(num_layers=1, **overrides):
@@ -108,6 +109,57 @@ def test_build_configs_expands_ratio_into_isolated_layer_configs():
     assert len({id(config) for config in configs}) == 6
     assert len({id(config.norm) for config in configs}) == 6
     assert len({id(config.norm.kwargs) for config in configs}) == 6
+
+
+def test_build_configs_merges_and_clones_qk_norm_config():
+    configs = build_attention_configs(
+        num_layers=2,
+        qk_norm={
+            "type": "RMSNorm",
+            "eps": 1e-5,
+        },
+        layers=[
+            {
+                "type": "GroupedQueryAttention",
+                "kv_heads": 2,
+                "qk_norm": {"eps": 1e-6},
+            }
+        ],
+    )
+
+    assert all(config.qk_norm.normalizer_type is RMSNorm for config in configs)
+    assert all(
+        config.qk_norm.kwargs == {"eps": 1e-6, "bias": False} for config in configs
+    )
+    assert len({id(config.qk_norm) for config in configs}) == 2
+    assert len({id(config.qk_norm.kwargs) for config in configs}) == 2
+
+
+def test_attention_layer_can_disable_shared_qk_norm():
+    configs = build_attention_configs(
+        num_layers=2,
+        qk_norm={"type": "RMSNorm"},
+        ratio=[1, 1],
+        layers=[
+            {
+                "type": "GroupedQueryAttention",
+                "kv_heads": 2,
+            },
+            {
+                "type": "CausalMultiHeadAttention",
+                "qk_norm": None,
+            },
+        ],
+    )
+
+    assert configs[0].qk_norm.normalizer_type is RMSNorm
+    assert configs[1].qk_norm is None
+
+
+def test_qk_norm_is_disabled_by_default():
+    configs = build_attention_configs(num_layers=2)
+
+    assert all(config.qk_norm is None for config in configs)
 
 
 def test_single_attention_layer_does_not_require_ratio():

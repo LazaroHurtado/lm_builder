@@ -9,6 +9,20 @@ from lm_builder.attention import (
     GroupedQueryAttention,
     MultiQueryAttention,
 )
+from lm_builder.inference import KVCache
+from lm_builder.normalizers import NormalizerConfig, RMSNorm
+
+
+class RecordingPositionalEmbedding(nn.Module):
+    def __init__(self, *_):
+        super().__init__()
+        self.query = None
+        self.key = None
+
+    def forward(self, query, key, **_):
+        self.query = query.detach().clone()
+        self.key = key.detach().clone()
+        return query, key
 
 
 def test_scaled_dot_product_attention_dropout_respects_module_mode(monkeypatch):
@@ -102,3 +116,107 @@ def test_attention_uses_one_equivalent_qkv_projection(
     torch.testing.assert_close(query, query_projection(inputs), rtol=1e-5, atol=1e-6)
     torch.testing.assert_close(key, key_projection(inputs), rtol=1e-5, atol=1e-6)
     torch.testing.assert_close(value, value_projection(inputs), rtol=1e-5, atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("attention_type", "kv_heads"),
+    [
+        (CausalMultiHeadAttention, 4),
+        (MultiQueryAttention, 1),
+        (GroupedQueryAttention, 2),
+    ],
+)
+def test_attention_builds_independent_per_head_qk_norms(
+    attention_type,
+    kv_heads,
+):
+    attention = attention_type(
+        AttentionConfig(
+            context_length=4,
+            embedding_dimension=8,
+            num_heads=4,
+            attention_type=attention_type,
+            kv_heads=kv_heads,
+            qk_norm=NormalizerConfig.build_config(
+                {
+                    "type": "RMSNorm",
+                    "eps": 1e-5,
+                }
+            ),
+        )
+    )
+
+    output = attention(torch.randn(2, 4, 8))
+    output.square().mean().backward()
+
+    assert isinstance(attention.q_norm, RMSNorm)
+    assert isinstance(attention.k_norm, RMSNorm)
+    assert attention.q_norm is not attention.k_norm
+    assert attention.q_norm.weight.shape == (attention.head_dim,)
+    assert attention.k_norm.weight.shape == (attention.head_dim,)
+    assert attention.q_norm.weight.data_ptr() != attention.k_norm.weight.data_ptr()
+    assert attention.q_norm.weight.grad.abs().sum() > 0
+    assert attention.k_norm.weight.grad.abs().sum() > 0
+
+
+def test_qk_norm_runs_before_positional_embeddings_and_kv_repetition():
+    attention = GroupedQueryAttention(
+        AttentionConfig(
+            context_length=4,
+            embedding_dimension=8,
+            num_heads=4,
+            attention_type=GroupedQueryAttention,
+            kv_heads=2,
+            positional_embedding=RecordingPositionalEmbedding,
+            qk_norm=NormalizerConfig.build_config({"type": "RMSNorm"}),
+        )
+    )
+    inputs = torch.randn(2, 4, 8)
+    with torch.no_grad():
+        query, key, value = attention.get_qkv(inputs)
+        query, key, _ = attention.get_heads(query, key, value)
+        expected_query = attention.q_norm(query)
+        expected_key = attention.k_norm(key)
+        attention(inputs)
+
+    assert attention.pos_emb.query.shape == (2, 4, 4, 2)
+    assert attention.pos_emb.key.shape == (2, 2, 4, 2)
+    torch.testing.assert_close(attention.pos_emb.query, expected_query)
+    torch.testing.assert_close(attention.pos_emb.key, expected_key)
+
+
+def test_qk_norm_adds_no_modules_or_parameters_when_disabled():
+    attention = CausalMultiHeadAttention(
+        AttentionConfig(
+            context_length=4,
+            embedding_dimension=8,
+            num_heads=4,
+            attention_type=CausalMultiHeadAttention,
+        )
+    )
+
+    assert not attention.has_qk_norm
+    assert not hasattr(attention, "q_norm")
+    assert not hasattr(attention, "k_norm")
+    assert all(
+        "q_norm" not in name and "k_norm" not in name for name in attention.state_dict()
+    )
+
+
+def test_qk_norm_preserves_kv_dtype_during_autocast():
+    attention = CausalMultiHeadAttention(
+        AttentionConfig(
+            context_length=4,
+            embedding_dimension=8,
+            num_heads=4,
+            attention_type=CausalMultiHeadAttention,
+            qk_norm=NormalizerConfig.build_config({"type": "RMSNorm"}),
+        )
+    ).eval()
+    kv_cache = KVCache(context_length=4)
+
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        attention(torch.randn(2, 4, 8), kv_cache=kv_cache)
+
+    assert kv_cache.k.dtype is torch.bfloat16
+    assert kv_cache.v.dtype is torch.bfloat16

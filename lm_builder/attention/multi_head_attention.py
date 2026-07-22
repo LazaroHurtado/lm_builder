@@ -48,6 +48,11 @@ class MultiHeadAttention(Attention):
             self.embedding_dim, self.embedding_dim, bias=config.bias
         )
 
+        self.has_qk_norm = config.qk_norm is not None
+        if self.has_qk_norm:
+            self.q_norm = config.qk_norm.build(self.head_dim)
+            self.k_norm = config.qk_norm.build(self.head_dim)
+
         self.attn_dropout = nn.Dropout(config.attn_dropout)
         self.resid_dropout = nn.Dropout(config.resid_dropout)
 
@@ -218,6 +223,10 @@ class MultiHeadAttention(Attention):
         # interpretation.
         # (B, num_head, T, head_dim)
         q, k, v = self.get_heads(q, k, v)
+        if self.has_qk_norm:
+            q = self.q_norm(q).to(dtype=q.dtype)
+            k = self.k_norm(k).to(dtype=k.dtype)
+
         if self.has_positional_embedding:
             q, k = self.pos_emb(q, k, position_ids=position_ids)
 

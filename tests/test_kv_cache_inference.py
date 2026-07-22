@@ -23,6 +23,7 @@ def build_model(
     num_layers=2,
     ratio=None,
     window_size=3,
+    qk_norm=None,
 ):
     attention_types = (
         attention_type if isinstance(attention_type, list) else [attention_type]
@@ -36,6 +37,7 @@ def build_model(
         {
             "num_heads": 4,
             "positional_embedding": (RotaryPE if position_type == "rotary" else None),
+            "qk_norm": qk_norm,
             "layers": [
                 {
                     "type": resolved_attention_type,
@@ -80,16 +82,19 @@ def build_model(
 @pytest.mark.parametrize("position_type", ["absolute", "rotary"])
 @pytest.mark.parametrize("use_scaled_dot_product_attention", [True, False])
 @pytest.mark.parametrize("with_attention_mask", [True, False])
+@pytest.mark.parametrize("with_qk_norm", [True, False])
 def test_cached_decode_matches_full_forward(
     attention_type,
     position_type,
     use_scaled_dot_product_attention,
     with_attention_mask,
+    with_qk_norm,
 ):
     torch.manual_seed(7)
     model = build_model(
         attention_type=attention_type,
         position_type=position_type,
+        qk_norm={"type": "RMSNorm"} if with_qk_norm else None,
     )
     for block in model.transformer.blocks:
         block.attn.has_flash_attn = use_scaled_dot_product_attention and hasattr(

@@ -26,6 +26,9 @@ attention_config:
   norm:
     type: RMSNorm
     eps: 1.0e-5
+  qk_norm:
+    type: RMSNorm
+    eps: 1.0e-6
   ratio: [5, 2]
   layers:
     - type: GroupedQueryAttention
@@ -42,6 +45,12 @@ does not require `ratio`. `TransformerConfig` injects the top-level
 and injects `embedding_dimension` into the feed-forward config. Loading this
 schema through `AttentionConfig.from_yml()` returns one independent, fully
 resolved `AttentionConfig` for each transformer layer.
+
+`norm` configures residual-stream normalization before attention. Optional
+`qk_norm` builds independent query and key normalizers over each head's
+`head_dim`. They run after head shaping and before positional embeddings, KV
+caching, and GQA/MQA key-value head sharing. Values are not normalized. Omit
+`qk_norm` to preserve the original attention behavior and parameter layout.
 
 ### Mixture-of-experts feed-forward layers
 
