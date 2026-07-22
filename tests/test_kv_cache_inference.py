@@ -105,7 +105,9 @@ def test_cached_decode_matches_full_forward(
     attention_mask = (
         torch.tensor([[0, 1, 1, 1], [1, 1, 1, 1]]) if with_attention_mask else None
     )
-    kv_caches = [KVCache(model.context_length) for _ in model.transformer.blocks]
+    kv_caches = [
+        KVCache(capacity=model.context_length) for _ in model.transformer.blocks
+    ]
 
     with torch.inference_mode():
         full_logits, _, _ = model(input_ids, attention_mask=attention_mask)
@@ -160,6 +162,44 @@ def test_generate_prefills_once_then_decodes_single_tokens():
         assert projected_sequence_lengths == [3, 4, 5]
     finally:
         hook.remove()
+
+
+@pytest.mark.parametrize(
+    ("prompt_length", "max_new_tokens", "expected_capacity"),
+    [
+        (3, 2, 5),
+        (7, 3, 8),
+    ],
+)
+def test_generate_sizes_kv_cache_to_sequence_budget(
+    monkeypatch,
+    prompt_length,
+    max_new_tokens,
+    expected_capacity,
+):
+    model = build_model(context_length=8)
+    created_caches = []
+
+    def create_cache(capacity):
+        cache = KVCache(capacity=capacity)
+        created_caches.append(cache)
+        return cache
+
+    monkeypatch.setattr("lm_builder.language_model.KVCache", create_cache)
+    input_ids = torch.arange(prompt_length).remainder(model.config.vocab_size)[None, :]
+
+    list(
+        model.generate(
+            input_ids,
+            max_new_tokens=max_new_tokens,
+            temperature=0,
+        )
+    )
+
+    assert len(created_caches) == len(model.transformer.blocks)
+    assert all(cache.capacity == expected_capacity for cache in created_caches)
+    assert all(cache.k.size(2) == expected_capacity for cache in created_caches)
+    assert all(cache.v.size(2) == expected_capacity for cache in created_caches)
 
 
 @pytest.mark.parametrize(
@@ -410,7 +450,9 @@ def test_generation_uses_fresh_cache_for_each_call():
 
 def test_grouped_query_cache_keeps_native_kv_heads():
     model = build_model(attention_type=GroupedQueryAttention)
-    kv_caches = [KVCache(model.context_length) for _ in model.transformer.blocks]
+    kv_caches = [
+        KVCache(capacity=model.context_length) for _ in model.transformer.blocks
+    ]
 
     with torch.inference_mode():
         model(

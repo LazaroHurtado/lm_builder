@@ -213,7 +213,7 @@ def test_qk_norm_preserves_kv_dtype_during_autocast():
             qk_norm=NormalizerConfig.build_config({"type": "RMSNorm"}),
         )
     ).eval()
-    kv_cache = KVCache(context_length=4)
+    kv_cache = KVCache(capacity=4)
 
     with torch.autocast("cpu", dtype=torch.bfloat16):
         attention(torch.randn(2, 4, 8), kv_cache=kv_cache)

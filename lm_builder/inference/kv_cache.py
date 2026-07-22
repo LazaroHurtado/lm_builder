@@ -2,13 +2,13 @@ from ..utils import is_positive_integer
 
 
 class KVCache:
-    def __init__(self, context_length: int):
-        if not is_positive_integer(context_length):
-            raise ValueError("context_length must be a positive integer.")
+    def __init__(self, capacity: int):
+        if not is_positive_integer(capacity):
+            raise ValueError("capacity must be a positive integer.")
 
         self.k = None
         self.v = None
-        self.context_length = context_length
+        self.capacity = capacity
         self._sequence_length = 0
         self._tokens_seen = 0
 
@@ -34,7 +34,7 @@ class KVCache:
             == (
                 tensor.size(0),
                 tensor.size(1),
-                self.context_length,
+                self.capacity,
                 tensor.size(3),
             )
             and storage.device == tensor.device
@@ -53,13 +53,13 @@ class KVCache:
         self.k = k.new_empty(
             k.size(0),
             k.size(1),
-            self.context_length,
+            self.capacity,
             k.size(3),
         )
         self.v = v.new_empty(
             v.size(0),
             v.size(1),
-            self.context_length,
+            self.capacity,
             v.size(3),
         )
 
@@ -86,18 +86,18 @@ class KVCache:
 
         incoming_length = k.size(2)
         next_sequence_length = self.sequence_length + incoming_length
-        if next_sequence_length > self.context_length and incoming_length != 1:
+        if next_sequence_length > self.capacity and incoming_length != 1:
             raise ValueError(
                 "Rolling KV cache overflow only supports single-token updates."
             )
 
         self._ensure_storage(k, v)
-        overflow = max(0, next_sequence_length - self.context_length)
+        overflow = max(0, next_sequence_length - self.capacity)
         start = self._shift_left(overflow) if overflow else self.sequence_length
         end = start + incoming_length
         self.k[:, :, start:end].copy_(k)
         self.v[:, :, start:end].copy_(v)
-        self._sequence_length = min(next_sequence_length, self.context_length)
+        self._sequence_length = min(next_sequence_length, self.capacity)
         self._tokens_seen += incoming_length
 
         return (

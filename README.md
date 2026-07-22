@@ -108,17 +108,20 @@ is always one and therefore receives no routing gradient from cross-entropy.
 
 `LanguageModel.generate()` and `LanguageModel.prompt()` use an inference-only KV
 cache by default for causal attention models. The prompt is evaluated once, then
-only the newest token is evaluated. The model must be in evaluation mode. Set
-`use_cache=False` to use full-sequence recomputation instead:
+only the newest token is evaluated. Each layer allocates
+`min(context_length, prompt_length + max_new_tokens)` cache entries instead of
+always allocating the full context window. The model must be in evaluation mode.
+Set `use_cache=False` to use full-sequence recomputation instead:
 
 ```python
 output = model.prompt("Hello", use_cache=False)
 ```
 
-For rotary or no positional embeddings, the cache evicts its oldest key/value
-entry after `context_length` and continues single-token decoding. Retained cached
-states preserve information from tokens that have since been evicted, so output
-after overflow can differ from uncached sliding-window recomputation.
+For rotary or no positional embeddings, a full cache evicts its oldest key/value
+entry and continues single-token decoding. Cache capacity never exceeds
+`context_length`. Retained cached states preserve information from tokens that
+have since been evicted, so output after overflow can differ from uncached
+sliding-window recomputation.
 
 Models with absolute input positional embeddings reset the cache and recompute
 the current context window after overflow because cached states cannot be safely
