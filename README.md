@@ -55,10 +55,15 @@ ffn_config:
   activation_fn: SiLU
   num_experts: 8
   top_k: 2
+  num_shared_experts: 1
 ```
 
 `num_experts` must be positive and `top_k` must be between `1` and
-`num_experts`.
+`num_experts`. `num_shared_experts` defaults to `0` and must be a non-negative
+integer. When enabled, the MoE adds one always-active feed-forward network whose
+intermediate width is `intermediate_dimension * num_shared_experts`. Shared
+expert output is added to routed expert output and does not participate in
+routing or routing loss.
 
 Transformer forward passes return cross-entropy and the mean routing loss
 across MoE layers separately. Cross-entropy is available when targets are

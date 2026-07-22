@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import torch
 from torch import nn
 
@@ -24,6 +26,14 @@ class MixtureOfExperts(nn.Module):
                 "top_k must be an integer between 1 and num_experts "
                 "for MixtureOfExperts."
             )
+        if not is_positive_integer(
+            config.num_shared_experts,
+            greater_than=-1,
+        ):
+            raise ValueError(
+                "num_shared_experts must be a non-negative integer "
+                "for MixtureOfExperts."
+            )
 
     def __init__(self, config: FeedForwardConfig):
         super().__init__()
@@ -34,11 +44,21 @@ class MixtureOfExperts(nn.Module):
 
         self.num_experts = config.num_experts
         self.top_k = config.top_k
+        self.num_shared_experts = config.num_shared_experts
 
         self.router = nn.Linear(self.embedding_dim, self.num_experts, bias=False)
         self.experts = nn.ModuleList(
             [FeedForward(config) for _ in range(self.num_experts)]
         )
+        self.shared_expert = None
+        if self.num_shared_experts:
+            shared_expert_config = replace(
+                config,
+                intermediate_dimension=(
+                    self.intermediate_dim * self.num_shared_experts
+                ),
+            )
+            self.shared_expert = FeedForward(shared_expert_config)
 
         self.config = config
 
@@ -160,9 +180,15 @@ class MixtureOfExperts(nn.Module):
         if x.numel() == 0:
             return x.reshape(*orig_shape), routing_loss
 
+        shared_out = None
+        if self.shared_expert is not None:
+            shared_out, _ = self.shared_expert(x)
+
         if self.top_k == self.num_experts:
             expert_probs = routing_logits.softmax(dim=-1)
             out = self._dispatch_all(x, expert_probs)
+            if shared_out is not None:
+                out.add_(shared_out.to(out.dtype))
             # (B*T, C) -> (B, T, C)
             return out.reshape(*orig_shape), routing_loss
 
@@ -177,6 +203,8 @@ class MixtureOfExperts(nn.Module):
         )
 
         out = torch.zeros_like(x)
+        if shared_out is not None:
+            out.add_(shared_out.to(out.dtype))
         assignment_offset = 0
         for i, assignment_count in expert_assignments:
             expert = self.experts[i]

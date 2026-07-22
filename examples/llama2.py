@@ -91,6 +91,7 @@ def main():
             stream=True,
             debug=True,
             device=DEVICE,
+            use_cache=True,
         )
 
 

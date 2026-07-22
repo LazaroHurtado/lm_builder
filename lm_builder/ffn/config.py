@@ -19,6 +19,7 @@ class FeedForwardConfig:
     bias: bool = False
     num_experts: int = 0
     top_k: int = 0
+    num_shared_experts: int = 0
     norm: NormalizerConfig = field(default_factory=NormalizerConfig)
 
     def __post_init__(self):

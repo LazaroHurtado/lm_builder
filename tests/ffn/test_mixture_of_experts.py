@@ -9,7 +9,12 @@ from lm_builder.ffn import FeedForwardConfig, MixtureOfExperts
 from lm_builder.transformer import Transformer, TransformerConfig
 
 
-def build_moe(num_experts=4, top_k=2, dropout=0.0):
+def build_moe(
+    num_experts=4,
+    top_k=2,
+    dropout=0.0,
+    num_shared_experts=0,
+):
     return MixtureOfExperts(
         FeedForwardConfig(
             embedding_dimension=8,
@@ -18,6 +23,7 @@ def build_moe(num_experts=4, top_k=2, dropout=0.0):
             num_experts=num_experts,
             top_k=top_k,
             dropout=dropout,
+            num_shared_experts=num_shared_experts,
         )
     )
 
@@ -43,13 +49,18 @@ def reference_forward(model, inputs):
             ]
         )
         outputs.append((expert_outputs * token_weights.unsqueeze(-1)).sum(dim=0))
-    return torch.stack(outputs).reshape(original_shape)
+    outputs = torch.stack(outputs)
+    if model.shared_expert is not None:
+        shared_output, _ = model.shared_expert(inputs)
+        outputs = outputs + shared_output
+    return outputs.reshape(original_shape)
 
 
 def test_top_one_is_supported():
     model = build_moe(top_k=1)
 
     assert model.top_k == 1
+    assert model.shared_expert is None
 
 
 @pytest.mark.parametrize("num_experts", [0, -1, 1.5, True])
@@ -83,10 +94,48 @@ def test_top_k_must_be_between_one_and_num_experts(top_k):
         )
 
 
+@pytest.mark.parametrize("num_shared_experts", [-1, 1.5, True])
+def test_num_shared_experts_must_be_a_non_negative_integer(num_shared_experts):
+    with pytest.raises(
+        ValueError,
+        match="num_shared_experts must be a non-negative integer",
+    ):
+        build_moe(num_shared_experts=num_shared_experts)
+
+
+def test_shared_expert_uses_combined_intermediate_width():
+    model = build_moe(num_shared_experts=2)
+
+    assert model.num_shared_experts == 2
+    assert model.shared_expert.hidden_dim == 2 * model.intermediate_dim
+
+
+def test_shared_experts_build_from_config():
+    config = FeedForwardConfig.build_config(
+        {
+            "type": "MixtureOfExperts",
+            "intermediate_dimension": 16,
+            "num_experts": 4,
+            "top_k": 2,
+            "num_shared_experts": 2,
+        },
+        embedding_dimension=8,
+    )
+
+    model = MixtureOfExperts(config)
+
+    assert model.num_shared_experts == 2
+    assert model.shared_expert.hidden_dim == 32
+
+
+@pytest.mark.parametrize("num_shared_experts", [0, 1, 2])
 @pytest.mark.parametrize("top_k", [1, 2, 3, 4])
-def test_forward_and_gradients_match_reference(top_k):
+def test_forward_and_gradients_match_reference(top_k, num_shared_experts):
     torch.manual_seed(7)
-    model = build_moe(top_k=top_k)
+    model = build_moe(
+        top_k=top_k,
+        num_shared_experts=num_shared_experts,
+    )
     reference_model = copy.deepcopy(model)
     inputs = torch.randn(2, 3, 8, requires_grad=True)
     reference_inputs = inputs.detach().clone().requires_grad_(True)
@@ -111,6 +160,23 @@ def test_forward_and_gradients_match_reference(top_k):
                 reference_parameter.grad,
                 atol=1e-5,
             )
+    if model.shared_expert is not None:
+        assert all(
+            parameter.grad is not None for parameter in model.shared_expert.parameters()
+        )
+
+
+def test_shared_expert_does_not_change_routing_loss():
+    torch.manual_seed(11)
+    routed_model = build_moe(top_k=1)
+    torch.manual_seed(11)
+    shared_model = build_moe(top_k=1, num_shared_experts=2)
+    inputs = torch.randn(2, 3, routed_model.embedding_dim)
+
+    _, routed_loss = routed_model(inputs)
+    _, shared_loss = shared_model(inputs)
+
+    assert torch.allclose(routed_loss, shared_loss)
 
 
 def test_routing_loss_is_only_computed_during_training():
@@ -156,7 +222,7 @@ def test_only_active_experts_are_called():
 
 def test_non_contiguous_input_matches_contiguous_input():
     torch.manual_seed(3)
-    model = build_moe().eval()
+    model = build_moe(num_shared_experts=1).eval()
     inputs = torch.randn(2, 8, 3).transpose(1, 2)
 
     assert not inputs.is_contiguous()
@@ -184,8 +250,9 @@ def test_scalar_input_is_rejected():
         model(torch.tensor(1.0))
 
 
-def test_empty_input_preserves_shape():
-    model = build_moe()
+@pytest.mark.parametrize("num_shared_experts", [0, 1])
+def test_empty_input_preserves_shape(num_shared_experts):
+    model = build_moe(num_shared_experts=num_shared_experts)
     inputs = torch.empty(2, 0, model.embedding_dim, requires_grad=True)
 
     output, routing_loss = model(inputs)
@@ -197,8 +264,12 @@ def test_empty_input_preserves_shape():
 
 
 def test_expert_dropout_is_applied_only_during_training():
-    model = build_moe(num_experts=2, dropout=1.0)
-    for expert in model.experts:
+    model = build_moe(
+        num_experts=2,
+        dropout=1.0,
+        num_shared_experts=1,
+    )
+    for expert in [*model.experts, model.shared_expert]:
         for projection in (
             expert.up_proj,
             expert.gate_proj,
@@ -218,7 +289,7 @@ def test_expert_dropout_is_applied_only_during_training():
 
 def test_cpu_autocast_preserves_output_and_router_gradients():
     torch.manual_seed(5)
-    model = build_moe()
+    model = build_moe(num_shared_experts=1)
     inputs = torch.randn(2, 3, model.embedding_dim, requires_grad=True)
 
     with torch.autocast("cpu", dtype=torch.bfloat16):
@@ -362,7 +433,7 @@ def test_transformer_routing_loss_ignores_left_padding():
 )
 def test_mps_forward_and_backward():
     torch.manual_seed(9)
-    model = build_moe(top_k=1).to("mps")
+    model = build_moe(top_k=1, num_shared_experts=1).to("mps")
     inputs = torch.randn(
         2,
         3,
