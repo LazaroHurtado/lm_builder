@@ -18,6 +18,7 @@ class FeedForward(nn.Module):
         self.activation_fn = config.activation_fn()
         self.down_proj = nn.Linear(self.hidden_dim, self.in_dim, bias=config.bias)
         self.gate_proj = nn.Linear(self.in_dim, self.hidden_dim, bias=config.bias)
+        self.dropout = nn.Dropout(config.dropout)
 
         self.config = config
 
@@ -28,4 +29,4 @@ class FeedForward(nn.Module):
         x = out1 * self.activation_fn(out2)
 
         out3 = self.down_proj(x)
-        return out3
+        return self.dropout(out3)

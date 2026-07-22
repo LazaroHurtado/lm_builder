@@ -43,6 +43,24 @@ and injects `embedding_dimension` into the feed-forward config. Loading this
 schema through `AttentionConfig.from_yml()` returns one independent, fully
 resolved `AttentionConfig` for each transformer layer.
 
+### Mixture-of-experts feed-forward layers
+
+Select `MixtureOfExperts` as the feed-forward type and configure at least two
+experts per token:
+
+```yaml
+ffn_config:
+  type: MixtureOfExperts
+  intermediate_dimension: 14336
+  activation_fn: SiLU
+  num_experts: 8
+  top_k: 2
+```
+
+`num_experts` must be positive and `top_k` must be between `2` and
+`num_experts`. Top-1 routing is intentionally unavailable until routing-loss
+support is added.
+
 ### KV-cached generation
 
 `LanguageModel.generate()` and `LanguageModel.prompt()` use an inference-only KV
@@ -74,7 +92,7 @@ reindexed.
     - ~~kv cache~~
     - chunked kv cache
     - ~~rolling buffer caching after context overflow~~
-- ~~Mixture of experts~~ (to be verified)
+- ~~Mixture of experts~~
 - Positional embedding
     - ~~absolute p.e.~~
     - ~~rotary p.e.~~
