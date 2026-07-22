@@ -243,18 +243,20 @@ def test_unknown_attention_options_are_ignored():
 
 
 def test_noncausal_attention_rejects_window_size():
+    config = build_attention_configs(
+        layers=[
+            {
+                "type": "MultiHeadAttention",
+                "window_size": 4,
+            }
+        ]
+    )[0]
+
     with pytest.raises(
         ValueError,
         match="MultiHeadAttention does not support window_size",
     ):
-        build_attention_configs(
-            layers=[
-                {
-                    "type": "MultiHeadAttention",
-                    "window_size": 4,
-                }
-            ]
-        )
+        config.attention_type(config)
 
 
 def test_kv_heads_is_allowed_on_attention_types_that_do_not_use_it():
@@ -274,17 +276,19 @@ def test_noncausal_attention_cannot_opt_into_window_size():
     class NonCausalWindowAttention(MultiHeadAttention):
         supports_window_size = True
 
+    config = AttentionConfig(
+        context_length=8,
+        embedding_dimension=16,
+        num_heads=4,
+        attention_type=NonCausalWindowAttention,
+        window_size=4,
+    )
+
     with pytest.raises(
         ValueError,
         match="NonCausalWindowAttention does not support window_size",
     ):
-        AttentionConfig(
-            context_length=8,
-            embedding_dimension=16,
-            num_heads=4,
-            attention_type=NonCausalWindowAttention,
-            window_size=4,
-        )
+        config.attention_type(config)
 
 
 def test_attention_type_retains_torch_nn_fallback():

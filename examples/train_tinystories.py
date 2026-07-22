@@ -148,8 +148,6 @@ def train_epoch(
                 targets=batch["targets"],
                 attention_mask=batch["attention_mask"],
             )
-        if loss is None:
-            raise RuntimeError("The model did not return a training loss.")
         if not torch.isfinite(loss).item():
             raise FloatingPointError(
                 f"Non-finite loss at epoch {epoch}, training step {step}."

@@ -68,10 +68,9 @@ class LanguageModel(Transformer):
                 raise ValueError("Attention mask must match the input IDs shape.")
             full_attention_mask = full_attention_mask.to(input_ids.device)
 
-        cache_enabled = use_cache and len(self.transformer.blocks) > 0
         kv_caches = (
             [KVCache(self.context_length) for _ in self.transformer.blocks]
-            if cache_enabled
+            if use_cache
             else None
         )
 

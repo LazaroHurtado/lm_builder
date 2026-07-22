@@ -52,7 +52,7 @@ class Transformer(nn.Module):
         if len(cache_lengths) > 1:
             raise ValueError("All transformer KV caches must have equal lengths.")
 
-        return cache_lengths.pop() if cache_lengths else 0
+        return cache_lengths.pop()
 
     def _get_cached_tokens_seen(self, kv_caches):
         if kv_caches is None:
@@ -62,7 +62,7 @@ class Transformer(nn.Module):
         if len(token_counts) > 1:
             raise ValueError("All transformer KV caches must have equal token counts.")
 
-        return token_counts.pop() if token_counts else 0
+        return token_counts.pop()
 
     def _prepare_position_ids(
         self,

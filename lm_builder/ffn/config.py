@@ -46,8 +46,6 @@ class FeedForwardConfig:
         embedding_dimension: int,
     ) -> FeedForwardConfig:
         config = dict(config)
-        if not isinstance(config, dict):
-            raise TypeError("Feed forward config must be a mapping.")
 
         # Imported here to avoid importing the package while it is still
         # initializing this config module.

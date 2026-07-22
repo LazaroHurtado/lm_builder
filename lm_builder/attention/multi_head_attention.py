@@ -102,9 +102,6 @@ class MultiHeadAttention(Attention):
         key_length,
     ):
         # Combine structural and padding constraints into one boolean mask.
-        if query_length > key_length:
-            raise ValueError("Query length cannot exceed key length.")
-
         base_mask = self._build_base_attention_mask(
             query_length,
             key_length,

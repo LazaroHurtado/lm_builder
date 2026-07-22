@@ -75,16 +75,6 @@ class AttentionConfig:
             raise ValueError("attention_config.layers.type is required.")
         if self.window_size is not None and not is_positive_integer(self.window_size):
             raise ValueError("window_size must be a positive integer or None.")
-        supports_window_size = getattr(
-            self.attention_type,
-            "supports_window_size",
-            False,
-        )
-        is_causal = getattr(self.attention_type, "is_causal", False)
-        if self.window_size is not None and (not supports_window_size or not is_causal):
-            raise ValueError(
-                f"{self.attention_type.__name__} does not support window_size."
-            )
 
     def clone(self) -> AttentionConfig:
         return replace(
