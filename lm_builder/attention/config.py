@@ -73,7 +73,7 @@ class AttentionConfig:
     bias: bool = False
     attn_dropout: float = 0.0
     resid_dropout: float = 0.0
-    positional_embedding: Optional[Type[nn.Module]] = None
+    positional_embedding: Optional[Type] = None
     inv_freq: float = 10_000.0
     norm: NormalizerConfig = field(default_factory=NormalizerConfig)
     qk_norm: Optional[NormalizerConfig] = None
