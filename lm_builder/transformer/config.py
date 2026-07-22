@@ -1,115 +1,66 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Optional, Type, Union
+from dataclasses import dataclass, field
+from typing import List, Optional, Type
 
-import yaml
 from torch import nn
 
 from lm_builder import attention, ffn, normalizers, positional_embeddings
-from lm_builder.utils import module_has_attr
+from lm_builder.utils import is_positive_integer, load_yml, module_has_attr
 
 
 @dataclass
 class TransformerConfig:
-    attention_config: attention.AttentionConfig
+    embedding_dimension: int
+    context_length: int
+    attention_config: List[attention.AttentionConfig]
     ffn_config: ffn.FeedForwardConfig
     vocab_size: int
     num_layers: int
-    attention: Optional[
-        Union[
-            Type[attention.Attention],
-            List[Type[attention.Attention]],
-        ]
-    ] = None
-    ffn: Optional[ffn.FeedForward] = None
-    norm: nn.Module = nn.LayerNorm
-    attn_norm: nn.Module = nn.LayerNorm
-    ffn_norm: nn.Module = nn.LayerNorm
-    token_embedding: nn.Module = nn.Embedding
-    positional_embedding: Optional[nn.Module] = None
+    norm: normalizers.NormalizerConfig = field(
+        default_factory=normalizers.NormalizerConfig
+    )
+    token_embedding: Type[nn.Module] = nn.Embedding
+    positional_embedding: Optional[Type[nn.Module]] = None
     inv_freq: float = 10_000.0
     bias: bool = False
-    norm_bias: bool = False
     dropout: float = 0.0
 
     def __post_init__(self):
-        attention_ratio = self.attention_config.get_attention_ratio()
-        has_attention_list = isinstance(self.attention, list)
-
-        if has_attention_list:
-            if attention_ratio is None:
-                raise ValueError(
-                    "attention can only be a list when attention_ratio is set."
-                )
-            if len(self.attention) != len(attention_ratio):
-                raise ValueError(
-                    "attention list length must match attention_ratio component count."
-                )
-        elif attention_ratio is not None:
-            raise ValueError("attention must be a list when attention_ratio is set.")
+        if not is_positive_integer(self.embedding_dimension):
+            raise ValueError("embedding_dimension must be a positive integer.")
+        if not is_positive_integer(self.context_length):
+            raise ValueError("context_length must be a positive integer.")
+        if not is_positive_integer(self.num_layers):
+            raise ValueError("num_layers must be a positive integer.")
+        if len(self.attention_config) != self.num_layers:
+            raise ValueError(
+                "attention_config must contain one AttentionConfig per layer."
+            )
 
     @staticmethod
     def from_yml(file: str) -> TransformerConfig:
-        with open(file, "r", encoding="utf-8") as f:
-            config = yaml.safe_load(f)
-
-            return TransformerConfig.build_config(config)
-
-    @staticmethod
-    def _resolve_attention(config: dict) -> dict:
-        if not isinstance(config.get("attention"), list):
-            return module_has_attr(
-                config,
-                "attention",
-                primary_module=attention,
-                fallback_module=nn,
-            )
-
-        resolved_attention = []
-        for attention_name in config["attention"]:
-            resolved = module_has_attr(
-                {"attention": attention_name},
-                "attention",
-                primary_module=attention,
-                fallback_module=nn,
-            )
-            resolved_attention.append(resolved["attention"])
-
-        config["attention"] = resolved_attention
-        return config
+        return TransformerConfig.build_config(load_yml(file))
 
     @staticmethod
     def build_config(config: dict) -> TransformerConfig:
-        config = TransformerConfig._resolve_attention(config)
+        config = dict(config)
 
-        config = module_has_attr(config, "ffn", primary_module=ffn, fallback_module=nn)
-
-        # pylint: disable=duplicate-code
         config = module_has_attr(
-            config,
-            "positional_embedding",
-            primary_module=positional_embeddings,
-            fallback_module=nn,
+            config, "positional_embedding", positional_embeddings, nn
         )
-
         config = module_has_attr(config, "token_embedding", nn)
-        config = module_has_attr(
-            config, "norm", primary_module=normalizers, fallback_module=nn
-        )
-        config = module_has_attr(
-            config,
-            "attn_norm",
-            primary_module=normalizers,
-            fallback_module=nn,
-        )
-        config = module_has_attr(
-            config, "ffn_norm", primary_module=normalizers, fallback_module=nn
-        )
 
-        config["attention_config"] = attention.AttentionConfig.build_config(
-            config["attention_config"]
+        config["attention_config"] = attention.AttentionConfig.build_configs(
+            config["attention_config"],
+            config["num_layers"],
+            config["context_length"],
+            config["embedding_dimension"],
         )
-        config["ffn_config"] = ffn.FeedForwardConfig.build_config(config["ffn_config"])
+        config["ffn_config"] = ffn.FeedForwardConfig.build_config(
+            config["ffn_config"],
+            config["embedding_dimension"],
+        )
+        config["norm"] = normalizers.NormalizerConfig.build_config(config.get("norm"))
 
         return TransformerConfig(**config)

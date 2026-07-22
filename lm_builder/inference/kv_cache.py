@@ -1,10 +1,9 @@
+from ..utils import is_positive_integer
+
+
 class KVCache:
     def __init__(self, context_length: int):
-        if (
-            not isinstance(context_length, int)
-            or isinstance(context_length, bool)
-            or context_length <= 0
-        ):
+        if not is_positive_integer(context_length):
             raise ValueError("context_length must be a positive integer.")
 
         self.k = None

@@ -9,6 +9,7 @@ def test_grouped_query_attention_shares_key_value_heads():
             context_length=4,
             embedding_dimension=8,
             num_heads=4,
+            attention_type=GroupedQueryAttention,
             kv_heads=2,
         )
     )

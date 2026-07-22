@@ -3,8 +3,11 @@ from types import SimpleNamespace
 import torch
 
 from lm_builder import LanguageModel
-from lm_builder.attention import AttentionConfig
-from lm_builder.ffn import FeedForwardConfig
+from lm_builder.attention import (
+    AttentionConfig,
+    CausalMultiHeadAttention,
+)
+from lm_builder.ffn import FeedForward, FeedForwardConfig
 from lm_builder.transformer import TransformerConfig
 
 
@@ -54,17 +57,23 @@ def test_prompt_passes_and_extends_tokenizer_attention_mask():
     tokenizer = FakeTokenizer()
     model = RecordingLanguageModel(
         TransformerConfig(
-            attention_config=AttentionConfig(
-                context_length=3,
-                embedding_dimension=8,
-                num_heads=2,
-            ),
+            embedding_dimension=8,
+            context_length=3,
+            attention_config=[
+                AttentionConfig(
+                    context_length=3,
+                    embedding_dimension=8,
+                    num_heads=2,
+                    attention_type=CausalMultiHeadAttention,
+                )
+            ],
             ffn_config=FeedForwardConfig(
                 embedding_dimension=8,
                 intermediate_dimension=16,
+                ffn_type=FeedForward,
             ),
             vocab_size=10,
-            num_layers=0,
+            num_layers=1,
         ),
         tokenizer,
     )
@@ -73,6 +82,7 @@ def test_prompt_passes_and_extends_tokenizer_attention_mask():
         ["short", "longer"],
         max_new_tokens=2,
         temperature=0,
+        use_cache=False,
     )
 
     assert outputs == ["decoded", "decoded"]

@@ -11,29 +11,37 @@ $ source ./.venv/bin/activate
 $ python3 ./examples/gpt2.py
 ```
 
-### Sliding-window and global attention
+### Attention layer patterns
 
-Set `attention` to an ordered list and `attention_ratio` to a quoted,
-colon-separated string of at least two positive integers. Each ratio component
-controls the corresponding attention type. For example, `"5:2:3"` repeats five
-sliding-window layers, two grouped-query layers, and three full
-causal-attention layers:
+Place attention implementations and their overrides in `attention_config.layers`.
+Every non-container option on `attention_config` is inherited as a shared
+default, and every layer must declare its own `type`. A `ratio` is required when
+there is more than one entry; it contains one positive integer per entry:
 
 ```yaml
-attention:
-  - SlidingWindowAttention
-  - GroupedQueryAttention
-  - CausalMultiHeadAttention
+context_length: 16384
+embedding_dimension: 4096
 attention_config:
-  context_length: 16384
-  embedding_dimension: 4096
   num_heads: 32
-  kv_heads: 8
-  window_size: 4096
-  attention_ratio: "5:2:3"
+  norm:
+    type: RMSNorm
+    eps: 1.0e-5
+  ratio: [5, 2]
+  layers:
+    - type: GroupedQueryAttention
+      kv_heads: 8
+      window_size: 4096
+    - type: CausalMultiHeadAttention
+      window_size: null
 ```
 
-Without `attention_ratio`, `attention` must be a single attention type.
+This repeats five windowed grouped-query layers followed by two full causal
+layers. `num_layers` must be divisible by the sum of `ratio`. A single entry
+does not require `ratio`. `TransformerConfig` injects the top-level
+`context_length` and `embedding_dimension` into every resolved attention config,
+and injects `embedding_dimension` into the feed-forward config. Loading this
+schema through `AttentionConfig.from_yml()` returns one independent, fully
+resolved `AttentionConfig` for each transformer layer.
 
 ### KV-cached generation
 

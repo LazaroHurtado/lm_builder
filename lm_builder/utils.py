@@ -2,10 +2,20 @@ from collections import OrderedDict
 from functools import reduce
 
 import torch
+import yaml
+
+
+def is_positive_integer(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def load_yml(file):
+    with open(file, "r", encoding="utf-8") as config_file:
+        return yaml.safe_load(config_file)
 
 
 def module_has_attr(config, key, primary_module, fallback_module=None):
-    if key in config:
+    if key in config and isinstance(config[key], str):
         if hasattr(primary_module, config[key]):
             config[key] = getattr(primary_module, config[key])
         elif (fallback_module is not None) and hasattr(fallback_module, config[key]):

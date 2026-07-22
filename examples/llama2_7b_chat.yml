@@ -1,17 +1,23 @@
-attention: GroupedQueryAttention
+context_length: 512
+embedding_dimension: 4096
 attention_config:
   positional_embedding: RotaryPE
-  context_length: 512
-  embedding_dimension: 4096
   num_heads: 32
-  kv_heads: 32
-ffn: FeedForward
+  norm:
+    type: RMSNorm
+    bias: false
+  layers:
+    - type: GroupedQueryAttention
+      kv_heads: 32
 ffn_config:
-  embedding_dimension: 4096
+  type: FeedForward
   intermediate_dimension: 11008
   activation_fn: SiLU
-norm: RMSNorm
-ffn_norm: RMSNorm
-attn_norm: RMSNorm
+  norm:
+    type: RMSNorm
+    bias: false
+norm:
+  type: RMSNorm
+  bias: false
 vocab_size: 32000
 num_layers: 32

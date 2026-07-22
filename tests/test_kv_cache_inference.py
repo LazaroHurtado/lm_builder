@@ -9,7 +9,6 @@ from lm_builder.attention import (
     GroupedQueryAttention,
     MultiHeadAttention,
     MultiQueryAttention,
-    SlidingWindowAttention,
 )
 from lm_builder.ffn import FeedForward, FeedForwardConfig
 from lm_builder.inference import KVCache
@@ -22,27 +21,49 @@ def build_model(
     position_type="rotary",
     context_length=6,
     num_layers=2,
-    attention_ratio=None,
+    ratio=None,
+    window_size=3,
 ):
-    attention_config = AttentionConfig(
-        context_length=context_length,
-        embedding_dimension=8,
-        num_heads=4,
-        kv_heads=2,
-        window_size=3,
-        positional_embedding=RotaryPE if position_type == "rotary" else None,
-        attention_ratio=attention_ratio,
+    attention_types = (
+        attention_type if isinstance(attention_type, list) else [attention_type]
+    )
+    window_sizes = (
+        window_size
+        if isinstance(window_size, list)
+        else [window_size] * len(attention_types)
+    )
+    attention_config = AttentionConfig.build_configs(
+        {
+            "num_heads": 4,
+            "positional_embedding": (RotaryPE if position_type == "rotary" else None),
+            "layers": [
+                {
+                    "type": resolved_attention_type,
+                    "kv_heads": 2,
+                    "window_size": resolved_window_size,
+                }
+                for resolved_attention_type, resolved_window_size in zip(
+                    attention_types,
+                    window_sizes,
+                )
+            ],
+            "ratio": ratio,
+        },
+        num_layers,
+        context_length,
+        8,
     )
     config = TransformerConfig(
+        embedding_dimension=8,
+        context_length=context_length,
         attention_config=attention_config,
         ffn_config=FeedForwardConfig(
             embedding_dimension=8,
             intermediate_dimension=16,
+            ffn_type=FeedForward,
         ),
         vocab_size=16,
         num_layers=num_layers,
-        attention=attention_type,
-        ffn=FeedForward,
         positional_embedding=AbsolutePE if position_type == "absolute" else None,
     )
     return LanguageModel(config, tokenizer=None).eval()
@@ -54,7 +75,6 @@ def build_model(
         CausalMultiHeadAttention,
         MultiQueryAttention,
         GroupedQueryAttention,
-        SlidingWindowAttention,
     ],
 )
 @pytest.mark.parametrize("position_type", ["absolute", "rotary"])
@@ -143,7 +163,6 @@ def test_generate_prefills_once_then_decodes_single_tokens():
         CausalMultiHeadAttention,
         MultiQueryAttention,
         GroupedQueryAttention,
-        SlidingWindowAttention,
     ],
 )
 def test_absolute_position_cache_recomputes_across_context_overflow(attention_type):
@@ -198,7 +217,6 @@ def test_absolute_position_cache_recomputes_across_context_overflow(attention_ty
         CausalMultiHeadAttention,
         MultiQueryAttention,
         GroupedQueryAttention,
-        SlidingWindowAttention,
     ],
 )
 @pytest.mark.parametrize("position_type", ["rotary", None])
@@ -237,7 +255,6 @@ def test_rolling_cache_keeps_single_token_decoding_after_overflow(
         CausalMultiHeadAttention,
         MultiQueryAttention,
         GroupedQueryAttention,
-        SlidingWindowAttention,
     ],
 )
 @pytest.mark.parametrize("with_attention_mask", [True, False])
@@ -328,11 +345,12 @@ def test_rolling_cache_handles_context_length_one():
 
 def test_rolling_cache_supports_mixed_attention_layers():
     model = build_model(
-        attention_type=[SlidingWindowAttention, CausalMultiHeadAttention],
+        attention_type=[GroupedQueryAttention, CausalMultiHeadAttention],
         position_type="rotary",
         context_length=4,
         num_layers=2,
-        attention_ratio="1:1",
+        ratio=[1, 1],
+        window_size=[2, None],
     )
     projected_sequence_lengths = [[], []]
     hooks = [
@@ -412,7 +430,10 @@ def test_generate_requires_eval_mode_for_kv_cache():
 
 
 def test_generate_rejects_noncausal_attention_cache():
-    model = build_model(attention_type=MultiHeadAttention)
+    model = build_model(
+        attention_type=MultiHeadAttention,
+        window_size=None,
+    )
 
     with pytest.raises(AssertionError, match="requires causal attention"):
         list(

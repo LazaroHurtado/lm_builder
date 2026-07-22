@@ -97,6 +97,7 @@ def test_rope_preserves_half_precision_with_position_ids(
             context_length=SEQ_LEN,
             embedding_dimension=HEAD_DIM,
             num_heads=NUM_HEAD,
+            attention_type=CausalMultiHeadAttention,
             positional_embedding=RotaryPE,
         )
     ).half()

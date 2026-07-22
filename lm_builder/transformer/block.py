@@ -1,22 +1,26 @@
 import torch
 from torch import nn
 
-from .config import TransformerConfig
+from ..attention import AttentionConfig
+from ..ffn import FeedForwardConfig
 
 
 class Block(nn.Module):
 
-    def __init__(self, config: TransformerConfig, attention_type=None):
+    def __init__(
+        self,
+        attention_config: AttentionConfig,
+        ffn_config: FeedForwardConfig,
+    ):
         super().__init__()
 
-        self.embedding_dim = config.attention_config.embedding_dimension
+        self.embedding_dim = attention_config.embedding_dimension
 
-        self.attn_norm = config.attn_norm(self.embedding_dim, bias=config.norm_bias)
-        attention_type = attention_type or config.attention
-        self.attn = attention_type(config.attention_config)
+        self.attn_norm = attention_config.norm.build(self.embedding_dim)
+        self.attn = attention_config.attention_type(attention_config)
 
-        self.ffn_norm = config.ffn_norm(self.embedding_dim, bias=config.norm_bias)
-        self.ffn = config.ffn(config.ffn_config)
+        self.ffn_norm = ffn_config.norm.build(self.embedding_dim)
+        self.ffn = ffn_config.ffn_type(ffn_config)
 
     def forward(
         self,

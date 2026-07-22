@@ -1,24 +1,29 @@
-attention: CausalMultiHeadAttention
+context_length: 1024
+embedding_dimension: 1600
 attention_config:
-  context_length: 1024
-  embedding_dimension: 1600
   num_heads: 25
   attn_dropout: 0.1
   resid_dropout: 0.1
-  bias: True
-ffn: ClassicFeedForward
+  bias: true
+  norm:
+    type: LayerNorm
+    bias: true
+  layers:
+    - type: CausalMultiHeadAttention
 ffn_config:
-  embedding_dimension: 1600
+  type: ClassicFeedForward
   intermediate_dimension: 6400
   dropout: 0.1
   activation_fn: GELU
-  bias: True
+  bias: true
+  norm:
+    type: LayerNorm
+    bias: true
 positional_embedding: AbsolutePE
-attn_norm: LayerNorm
-ffn_norm: LayerNorm
-norm: LayerNorm
-bias: False
+norm:
+  type: LayerNorm
+  bias: true
+bias: false
 dropout: 0.1
 vocab_size: 50257
 num_layers: 48
-norm_bias: True

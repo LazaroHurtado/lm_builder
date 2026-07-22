@@ -2,25 +2,31 @@ from __future__ import annotations
 
 import torch
 
-from .config import AttentionConfig
 from .multi_head_attention import MultiHeadAttention
 
 
 class CausalMultiHeadAttention(MultiHeadAttention):
     supports_kv_cache = True
+    supports_window_size = True
+    is_causal = True
 
-    def __init__(self, config: AttentionConfig):
-        super().__init__(config)
+    def _build_base_attention_mask(
+        self,
+        query_length,
+        key_length,
+        device,
+    ):
+        query_start = key_length - query_length
+        query_positions = torch.arange(
+            query_start,
+            key_length,
+            device=device,
+        ).unsqueeze(-1)
+        key_positions = torch.arange(key_length, device=device).unsqueeze(0)
+        attention_mask = key_positions <= query_positions
 
-    def _register_mask(self):
-        # Causal attention allows tokens to attend to only
-        # previous tokens, token t_i can also look at
-        # tokens t_{0:i-1}. This mask is applied to the
-        # Q*K^T matrix, which has a size of (B, T, T) so
-        # we construct a matrix where elements above the
-        # principle diagonal are zero with the same shape.
-        self.register_buffer(
-            "attention_mask",
-            torch.ones(self.context_len, self.context_len).tril()[None, None, :, :],
-            persistent=False,
-        )
+        if self.window_size is not None:
+            window_start = query_positions - self.window_size + 1
+            attention_mask &= key_positions >= window_start
+
+        return attention_mask[None, None, :, :]

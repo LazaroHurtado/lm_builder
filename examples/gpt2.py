@@ -1,5 +1,6 @@
 import gc
 import os
+from functools import partial
 
 import torch
 import torch.nn as nn
@@ -40,7 +41,10 @@ class GPT2Loader:
     @staticmethod
     def build_model(rank):
         transformer_config = TransformerConfig.from_yml(GPT2Loader.MODEL_ARCH_FILE)
-        transformer_config.ffn.activation_fn = nn.GELU(approximate="tanh")
+        transformer_config.ffn_config.activation_fn = partial(
+            nn.GELU,
+            approximate="tanh",
+        )
 
         tokenizer = AutoTokenizer.from_pretrained(
             GPT2Loader.HF_MODEL_NAME, clean_up_tokenization_spaces=True
@@ -97,7 +101,7 @@ def main():
         prompt = "Claude Shannon, the"
         generation_kwargs = {
             "max_new_tokens": 200,
-            "temperature": 0,
+            "temperature": 0.7,
             "stream": True,
             "debug": True,
             "device": get_device(),

@@ -13,14 +13,22 @@ from .config import AttentionConfig
 
 class MultiHeadAttention(Attention):
     supports_kv_cache = False
+    supports_window_size = False
+    is_causal = False
 
     def __init__(self, config: AttentionConfig):
         super().__init__()
+        if config.window_size is not None and (
+            not self.supports_window_size or not self.is_causal
+        ):
+            raise ValueError(f"{type(self).__name__} does not support window_size.")
+
         assert config.embedding_dimension % config.num_heads == 0
 
         self.context_len = config.context_length
         self.embedding_dim = config.embedding_dimension
         self.num_heads = config.num_heads
+        self.window_size = config.window_size
 
         self.head_dim = self.embedding_dim // self.num_heads
 
@@ -48,20 +56,6 @@ class MultiHeadAttention(Attention):
 
         self.has_flash_attn = hasattr(F, "scaled_dot_product_attention")
 
-        self._register_mask()
-
-    def _register_mask(self):
-        self.register_buffer(
-            "attention_mask",
-            torch.ones(self.context_len, self.context_len)[None, None, :, :],
-            persistent=False,
-        )
-
-    def _apply(self, fn):
-        if self.attention_mask.device.type == "meta":
-            self._register_mask()
-        return super()._apply(fn)
-
     def get_qkv(self, x: torch.Tensor):
         # x has dimensionality of (batch_size, sequence_length, embedding_dim).
         # (B, T, C) -> (B, T, C)
@@ -85,25 +79,36 @@ class MultiHeadAttention(Attention):
     def _repeat_kv_heads(self, key: torch.Tensor, value: torch.Tensor):
         return key, value
 
-    def _build_attention_mask(
+    def _build_base_attention_mask(
+        self,
+        query_length,
+        key_length,
+        device,
+    ):
+        return torch.ones(
+            1,
+            1,
+            query_length,
+            key_length,
+            dtype=torch.bool,
+            device=device,
+        )
+
+    def _build_explicit_attention_mask(
         self,
         attention_mask,
         batch_size,
         query_length,
         key_length,
     ):
+        # Combine structural and padding constraints into one boolean mask.
         if query_length > key_length:
             raise ValueError("Query length cannot exceed key length.")
 
-        query_start = key_length - query_length
-        base_mask = (
-            self.attention_mask[
-                :,
-                :,
-                query_start : query_start + query_length,
-                :key_length,
-            ]
-            == 1
+        base_mask = self._build_base_attention_mask(
+            query_length,
+            key_length,
+            self.q_proj.weight.device,
         )
         if attention_mask is None:
             return base_mask
@@ -131,22 +136,38 @@ class MultiHeadAttention(Attention):
             base_mask,
         )
 
+    def _prepare_attention_mask(
+        self, attention_mask, key_length, query_length, batch_size
+    ):
+        # Prefer SDPA's implicit causal mode when no explicit mask is needed.
+        is_fully_causal = (
+            self.is_causal and self.window_size is None and query_length == key_length
+        )
+        use_causal_mask = (
+            self.has_flash_attn and attention_mask is None and is_fully_causal
+        )
+
+        combined_attention_mask = None
+        if (
+            not self.has_flash_attn
+            or attention_mask is not None
+            or (self.is_causal and not use_causal_mask)
+        ):
+            combined_attention_mask = self._build_explicit_attention_mask(
+                attention_mask,
+                batch_size,
+                query_length,
+                key_length,
+            )
+        return combined_attention_mask, use_causal_mask
+
     def attention(
         self,
         query: torch.Tensor,
         key: torch.Tensor,
         value: torch.Tensor,
-        attention_mask=None,
+        attention_mask,
     ):
-        T = query.size(2)
-        if attention_mask is None:
-            attention_mask = self._build_attention_mask(
-                attention_mask=None,
-                batch_size=query.size(0),
-                query_length=T,
-                key_length=key.size(2),
-            )
-
         # (B, num_heads, T, head_dim) @ (B, num_heads, head_dim, T) -> (B, num_heads, T, T)
         scale = 1.0 / math.sqrt(key.size(dim=-1))
         attn = (query @ key.transpose(-2, -1)) * scale
@@ -196,13 +217,9 @@ class MultiHeadAttention(Attention):
 
         k, v = self._repeat_kv_heads(k, v)
 
-        combined_attention_mask = self._build_attention_mask(
-            attention_mask=attention_mask,
-            batch_size=B,
-            query_length=T,
-            key_length=k.size(2),
+        combined_attention_mask, use_causal_mask = self._prepare_attention_mask(
+            attention_mask, key_length=k.size(2), query_length=T, batch_size=B
         )
-
         if self.has_flash_attn:
             attn = F.scaled_dot_product_attention(  # pylint: disable=not-callable
                 q,
@@ -210,6 +227,7 @@ class MultiHeadAttention(Attention):
                 v,
                 attn_mask=combined_attention_mask,
                 dropout_p=self.attn_dropout.p if self.training else 0.0,
+                is_causal=use_causal_mask,
             )
         else:
             attn = self.attention(

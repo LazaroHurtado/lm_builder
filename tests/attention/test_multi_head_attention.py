@@ -21,6 +21,7 @@ def test_scaled_dot_product_attention_dropout_respects_module_mode(monkeypatch):
             context_length=4,
             embedding_dimension=8,
             num_heads=2,
+            attention_type=CausalMultiHeadAttention,
             attn_dropout=0.5,
         )
     )
