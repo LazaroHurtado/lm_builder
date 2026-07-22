@@ -31,15 +31,18 @@ class MultiHeadAttention(Attention):
         self.window_size = config.window_size
 
         self.head_dim = self.embedding_dim // self.num_heads
+        self.kv_heads = self._get_num_kv_heads(config)
+        assert (
+            self.num_heads % self.kv_heads == 0
+        ), "Number of query heads must be divisible by the number of key/value heads."
+        self.shared_heads = self.num_heads // self.kv_heads
 
-        self.q_proj = nn.Linear(
-            self.embedding_dim, self.embedding_dim, bias=config.bias
-        )
-        self.k_proj = nn.Linear(
-            self.embedding_dim, self.embedding_dim, bias=config.bias
-        )
-        self.v_proj = nn.Linear(
-            self.embedding_dim, self.embedding_dim, bias=config.bias
+        self.q_dim = self.embedding_dim
+        self.kv_dim = self.kv_heads * self.head_dim
+        self.qkv_proj = nn.Linear(
+            self.embedding_dim,
+            self.q_dim + (2 * self.kv_dim),
+            bias=config.bias,
         )
         self.out_proj = nn.Linear(
             self.embedding_dim, self.embedding_dim, bias=config.bias
@@ -56,27 +59,37 @@ class MultiHeadAttention(Attention):
 
         self.has_flash_attn = hasattr(F, "scaled_dot_product_attention")
 
+    def _get_num_kv_heads(self, config: AttentionConfig):
+        return config.num_heads
+
     def get_qkv(self, x: torch.Tensor):
         # x has dimensionality of (batch_size, sequence_length, embedding_dim).
-        # (B, T, C) -> (B, T, C)
-        q, k, v = self.q_proj(x), self.k_proj(x), self.v_proj(x)
-        return q, k, v
+        # (B, T, C) -> (B, T, q_dim + 2*kv_dim)
+        return self.qkv_proj(x).split(
+            (self.q_dim, self.kv_dim, self.kv_dim),
+            dim=-1,
+        )
 
     def get_heads(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor):
         B, T, _ = query.size()  # pylint: disable=invalid-name
 
-        # (B, T, C) -> (B, T, num_head, head_dim) -> (B, num_head, T, head_dim)
+        # Queries use every attention head, while keys and values may use fewer
+        # shared heads for MQA and GQA.
         q_heads = query.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
-        k_heads = key.view(B, key.size(dim=1), self.num_heads, self.head_dim).transpose(
+        k_heads = key.view(B, key.size(dim=1), self.kv_heads, self.head_dim).transpose(
             1, 2
         )
         v_heads = value.view(
-            B, value.size(dim=1), self.num_heads, self.head_dim
+            B, value.size(dim=1), self.kv_heads, self.head_dim
         ).transpose(1, 2)
 
         return q_heads, k_heads, v_heads
 
     def _repeat_kv_heads(self, key: torch.Tensor, value: torch.Tensor):
+        if 1 < self.kv_heads < self.num_heads:
+            key = key.repeat_interleave(self.shared_heads, dim=1)
+            value = value.repeat_interleave(self.shared_heads, dim=1)
+
         return key, value
 
     def _build_base_attention_mask(
@@ -105,7 +118,7 @@ class MultiHeadAttention(Attention):
         base_mask = self._build_base_attention_mask(
             query_length,
             key_length,
-            self.q_proj.weight.device,
+            self.qkv_proj.weight.device,
         )
         if attention_mask is None:
             return base_mask
@@ -197,8 +210,7 @@ class MultiHeadAttention(Attention):
         # batch size, sequence length, embedding dimensionality.
         B, T, C = x.size()
 
-        # we get the q, k, v projection of each embedding, each
-        # matrix will have dimension (B, T, C)
+        # Project Q, K, and V together, then split their output dimensions.
         q, k, v = self.get_qkv(x)
 
         # next we split the projected embeddings across the number

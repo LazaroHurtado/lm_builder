@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import torch
-from torch import nn
-
 from .config import AttentionConfig
 from .multi_query_attention import MultiQueryAttention
 
@@ -14,25 +11,5 @@ class GroupedQueryAttention(MultiQueryAttention):
     # 1 key and value head that is shared across 8 query heads, but in GQA we could
     # have 4 key and value heads where each head is shared with 2 of the 8 query heads.
 
-    def __init__(self, config: AttentionConfig):
-        super().__init__(config)
-
-        self.kv_heads = config.kv_heads
-
-        assert (
-            self.num_heads % self.kv_heads == 0
-        ), "Number of query heads must be divisible by the number of key/value heads."
-
-        self.shared_heads = self.num_heads // self.kv_heads
-        self.kv_dim = self.kv_heads * self.head_dim
-
-        self.q_proj = nn.Linear(self.embedding_dim, self.q_dim, bias=config.bias)
-        self.k_proj = nn.Linear(self.embedding_dim, self.kv_dim, bias=config.bias)
-        self.v_proj = nn.Linear(self.embedding_dim, self.kv_dim, bias=config.bias)
-
-    def _repeat_kv_heads(self, key: torch.Tensor, value: torch.Tensor):
-        if 1 < self.kv_heads < self.num_heads:
-            key = key.repeat_interleave(self.shared_heads, dim=1)
-            value = value.repeat_interleave(self.shared_heads, dim=1)
-
-        return key, value
+    def _get_num_kv_heads(self, config: AttentionConfig):
+        return config.kv_heads

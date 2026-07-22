@@ -129,7 +129,7 @@ def test_generate_prefills_once_then_decodes_single_tokens():
     torch.manual_seed(11)
     model = build_model(context_length=8)
     projected_sequence_lengths = []
-    hook = model.transformer.blocks[0].attn.k_proj.register_forward_pre_hook(
+    hook = model.transformer.blocks[0].attn.qkv_proj.register_forward_pre_hook(
         lambda _, inputs: projected_sequence_lengths.append(inputs[0].size(1))
     )
 
@@ -175,7 +175,7 @@ def test_absolute_position_cache_recomputes_across_context_overflow(attention_ty
     input_ids = torch.tensor([[0, 2, 3], [4, 5, 6]])
     attention_mask = torch.tensor([[0, 1, 1], [1, 1, 1]])
     projected_sequence_lengths = []
-    hook = model.transformer.blocks[0].attn.k_proj.register_forward_pre_hook(
+    hook = model.transformer.blocks[0].attn.qkv_proj.register_forward_pre_hook(
         lambda _, inputs: projected_sequence_lengths.append(inputs[0].size(1))
     )
 
@@ -230,7 +230,7 @@ def test_rolling_cache_keeps_single_token_decoding_after_overflow(
         context_length=4,
     )
     projected_sequence_lengths = []
-    hook = model.transformer.blocks[0].attn.k_proj.register_forward_pre_hook(
+    hook = model.transformer.blocks[0].attn.qkv_proj.register_forward_pre_hook(
         lambda _, inputs: projected_sequence_lengths.append(inputs[0].size(1))
     )
 
@@ -309,7 +309,7 @@ def test_rolling_cache_handles_context_length_one():
         context_length=1,
     )
     projected_sequence_lengths = []
-    hook = model.transformer.blocks[0].attn.k_proj.register_forward_pre_hook(
+    hook = model.transformer.blocks[0].attn.qkv_proj.register_forward_pre_hook(
         lambda _, inputs: projected_sequence_lengths.append(inputs[0].size(1))
     )
 
@@ -354,7 +354,7 @@ def test_rolling_cache_supports_mixed_attention_layers():
     )
     projected_sequence_lengths = [[], []]
     hooks = [
-        block.attn.k_proj.register_forward_pre_hook(
+        block.attn.qkv_proj.register_forward_pre_hook(
             lambda _, inputs, layer_index=layer_index: projected_sequence_lengths[
                 layer_index
             ].append(inputs[0].size(1))
@@ -384,7 +384,7 @@ def test_generation_uses_fresh_cache_for_each_call():
     torch.manual_seed(17)
     model = build_model(context_length=8)
     projected_sequence_lengths = []
-    hook = model.transformer.blocks[0].attn.k_proj.register_forward_pre_hook(
+    hook = model.transformer.blocks[0].attn.qkv_proj.register_forward_pre_hook(
         lambda _, inputs: projected_sequence_lengths.append(inputs[0].size(1))
     )
 

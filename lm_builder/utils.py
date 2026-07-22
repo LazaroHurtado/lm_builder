@@ -6,7 +6,9 @@ import yaml
 
 
 def is_positive_integer(value, greater_than=0):
-    return isinstance(value, int) and not isinstance(value, bool) and value > greater_than
+    return (
+        isinstance(value, int) and not isinstance(value, bool) and value > greater_than
+    )
 
 
 def load_yml(file):
@@ -25,17 +27,10 @@ def module_has_attr(config, key, primary_module, fallback_module=None):
     return config
 
 
-def partition_attn(parameters: torch.Tensor):
-    q_proj, k_proj, v_proj = parameters.chunk(3, dim=0)
-
-    return q_proj, k_proj, v_proj
-
-
 def change_state_dict_names(
     original_state_dict: dict[str, torch.Tensor],
     name_changes: list[tuple[str, str]],
     to_transpose: list[str] = [],
-    to_partition: str = None,
     remove_bias: bool = False,
 ):
     new_state_dict = OrderedDict({})
@@ -57,19 +52,46 @@ def change_state_dict_names(
         if should_transpose:
             parameters = parameters.t()
 
-        if to_partition is not None and to_partition in layer_name:
-            parameters = partition_attn(parameters)
-            new_names = [
-                new_name.replace(to_partition, ".q_proj."),
-                new_name.replace(to_partition, ".k_proj."),
-                new_name.replace(to_partition, ".v_proj."),
-            ]
-        else:
-            parameters = [parameters]
-            new_names = [new_name]
-
         with torch.no_grad():
-            for new_name, new_parameter in zip(new_names, parameters):
-                new_state_dict[new_name] = new_parameter
+            new_state_dict[new_name] = parameters
 
     return new_state_dict
+
+
+def combine_qkv_projections(state_dict: dict[str, torch.Tensor]):
+    combined_state_dict = OrderedDict({})
+    q_marker = ".attn.q_proj."
+    k_marker = ".attn.k_proj."
+    v_marker = ".attn.v_proj."
+
+    for layer_name, parameters in state_dict.items():
+        if q_marker in layer_name:
+            prefix, parameter_name = layer_name.split(q_marker, 1)
+            key_name = f"{prefix}{k_marker}{parameter_name}"
+            value_name = f"{prefix}{v_marker}{parameter_name}"
+            missing_names = [
+                name for name in (key_name, value_name) if name not in state_dict
+            ]
+            if missing_names:
+                raise KeyError(
+                    f"Missing QKV projection tensors: {', '.join(missing_names)}"
+                )
+
+            combined_state_dict[f"{prefix}.attn.qkv_proj.{parameter_name}"] = torch.cat(
+                (
+                    parameters,
+                    state_dict[key_name],
+                    state_dict[value_name],
+                ),
+                dim=0,
+            )
+        elif k_marker in layer_name or v_marker in layer_name:
+            marker = k_marker if k_marker in layer_name else v_marker
+            prefix, parameter_name = layer_name.split(marker, 1)
+            query_name = f"{prefix}{q_marker}{parameter_name}"
+            if query_name not in state_dict:
+                raise KeyError(f"{layer_name} has no matching query projection tensor.")
+        else:
+            combined_state_dict[layer_name] = parameters
+
+    return combined_state_dict

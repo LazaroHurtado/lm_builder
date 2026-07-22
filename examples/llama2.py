@@ -7,7 +7,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from lm_builder import LanguageModel
 from lm_builder.transformer import TransformerConfig
-from lm_builder.utils import change_state_dict_names
+from lm_builder.utils import change_state_dict_names, combine_qkv_projections
 
 load_dotenv()
 
@@ -62,7 +62,8 @@ class Llama2Loader:
             (".embed_tokens.weight", ".wte.weight"),
         ]
 
-        return change_state_dict_names(original_state_dict, name_changes)
+        state_dict = change_state_dict_names(original_state_dict, name_changes)
+        return combine_qkv_projections(state_dict)
 
 
 def main():

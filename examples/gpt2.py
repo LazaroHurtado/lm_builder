@@ -66,6 +66,7 @@ class GPT2Loader:
             ("ln_1.", "attn_norm."),
             ("ln_2.", "ffn_norm."),
             ("ln_f.", "norm."),
+            ("attn.c_attn", "attn.qkv_proj"),
             ("attn.c_proj", "attn.out_proj"),
         ]
         # GPT2 used convolutions instead of linear modules so these weights won't match
@@ -77,10 +78,10 @@ class GPT2Loader:
             "mlp.c_proj.weight",
         ]
 
-        to_partition = ".c_attn."
-
         return change_state_dict_names(
-            original_state_dict, name_changes, to_transpose, to_partition
+            original_state_dict,
+            name_changes,
+            to_transpose,
         )
 
 

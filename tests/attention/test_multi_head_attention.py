@@ -1,7 +1,14 @@
+import pytest
 import torch
+from torch import nn
 from torch.nn import functional as F
 
-from lm_builder.attention import AttentionConfig, CausalMultiHeadAttention
+from lm_builder.attention import (
+    AttentionConfig,
+    CausalMultiHeadAttention,
+    GroupedQueryAttention,
+    MultiQueryAttention,
+)
 
 
 def test_scaled_dot_product_attention_dropout_respects_module_mode(monkeypatch):
@@ -33,3 +40,63 @@ def test_scaled_dot_product_attention_dropout_respects_module_mode(monkeypatch):
     attention(inputs)
 
     assert dropout_probabilities == [0.0, 0.5]
+
+
+@pytest.mark.parametrize(
+    ("attention_type", "kv_heads", "kv_dimension"),
+    [
+        (CausalMultiHeadAttention, 4, 8),
+        (MultiQueryAttention, 1, 2),
+        (GroupedQueryAttention, 2, 4),
+    ],
+)
+def test_attention_uses_one_equivalent_qkv_projection(
+    attention_type,
+    kv_heads,
+    kv_dimension,
+):
+    torch.manual_seed(17)
+    embedding_dimension = 8
+    attention = attention_type(
+        AttentionConfig(
+            context_length=4,
+            embedding_dimension=embedding_dimension,
+            num_heads=4,
+            attention_type=attention_type,
+            kv_heads=kv_heads,
+            bias=True,
+        )
+    )
+    query_projection = nn.Linear(embedding_dimension, embedding_dimension)
+    key_projection = nn.Linear(embedding_dimension, kv_dimension)
+    value_projection = nn.Linear(embedding_dimension, kv_dimension)
+    with torch.no_grad():
+        attention.qkv_proj.weight.copy_(
+            torch.cat(
+                (
+                    query_projection.weight,
+                    key_projection.weight,
+                    value_projection.weight,
+                )
+            )
+        )
+        attention.qkv_proj.bias.copy_(
+            torch.cat(
+                (
+                    query_projection.bias,
+                    key_projection.bias,
+                    value_projection.bias,
+                )
+            )
+        )
+
+    inputs = torch.randn(2, 4, embedding_dimension)
+    query, key, value = attention.get_qkv(inputs)
+
+    assert attention.qkv_proj.out_features == embedding_dimension + 2 * kv_dimension
+    assert not hasattr(attention, "q_proj")
+    assert not hasattr(attention, "k_proj")
+    assert not hasattr(attention, "v_proj")
+    assert torch.allclose(query, query_projection(inputs))
+    assert torch.allclose(key, key_projection(inputs))
+    assert torch.allclose(value, value_projection(inputs))
