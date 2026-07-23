@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .config import AttentionConfig
+from .config import AttentionLayerConfig
 from .multi_query_attention import MultiQueryAttention
 
 
@@ -11,5 +11,5 @@ class GroupedQueryAttention(MultiQueryAttention):
     # 1 key and value head that is shared across 8 query heads, but in GQA we could
     # have 4 key and value heads where each head is shared with 2 of the 8 query heads.
 
-    def _get_num_kv_heads(self, config: AttentionConfig):
+    def _get_num_kv_heads(self, config: AttentionLayerConfig):
         return config.kv_heads

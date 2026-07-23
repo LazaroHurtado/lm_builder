@@ -13,12 +13,21 @@ class Transformer(nn.Module):
         self.embedding_dim = config.embedding_dimension
         self.context_length = config.context_length
 
+        qk_positional_embedding_config = config.attention_config.qk_positional_embedding
+        self.qk_positional_embedding = None
+        if qk_positional_embedding_config is not None:
+            self.qk_positional_embedding = qk_positional_embedding_config.build(
+                config.attention_config.layers[0].head_dim,
+                self.context_length,
+            )
+
         blocks = [
             Block(
                 attention_config=attention_config,
                 ffn_config=config.ffn_config.clone(),
+                qk_positional_embedding=self.qk_positional_embedding,
             )
-            for attention_config in config.attention_config
+            for attention_config in config.attention_config.layers
         ]
 
         self.wte = config.token_embedding(config.vocab_size, self.embedding_dim)
@@ -70,13 +79,12 @@ class Transformer(nn.Module):
 
         return token_counts.pop()
 
+    @staticmethod
     def _prepare_position_ids(
-        self,
         x,
         position_ids,
         attention_mask,
         cached_tokens_seen,
-        kv_caches,
     ):
         batch_size, sequence_length = x.size()
         expected_shape = (batch_size, sequence_length)
@@ -91,15 +99,12 @@ class Transformer(nn.Module):
             position_ids.masked_fill_(~attention_mask, 0)
             return position_ids[:, -sequence_length:]
 
-        if kv_caches is not None:
-            return torch.arange(
-                cached_tokens_seen,
-                cached_tokens_seen + sequence_length,
-                device=x.device,
-                dtype=torch.long,
-            ).expand(batch_size, -1)
-
-        return None
+        return torch.arange(
+            cached_tokens_seen,
+            cached_tokens_seen + sequence_length,
+            device=x.device,
+            dtype=torch.long,
+        ).expand(batch_size, -1)
 
     def forward(  # pylint: disable=too-many-locals
         self,
@@ -136,7 +141,6 @@ class Transformer(nn.Module):
             position_ids,
             attention_mask,
             cached_tokens_seen,
-            _kv_caches,
         )
 
         # Token embedding layer
@@ -146,13 +150,20 @@ class Transformer(nn.Module):
 
         x = self.dropout(x)  # (B, T, C)
 
+        qk_position_data = None
+        if self.qk_positional_embedding is not None:
+            qk_position_data = self.qk_positional_embedding.prepare(
+                x,
+                position_ids,
+            )
+
         routing_losses = []
         for layer_index, block in enumerate(self.blocks):
             kv_cache = None if _kv_caches is None else _kv_caches[layer_index]
             x, routing_loss = block(
                 x,
                 attention_mask=attention_mask,
-                position_ids=position_ids,
+                qk_position_data=qk_position_data,
                 kv_cache=kv_cache,
             )
             if routing_loss is not None:

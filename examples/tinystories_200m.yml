@@ -1,7 +1,8 @@
 context_length: 256
 embedding_dimension: 768
 attention_config:
-  positional_embedding: RotaryPE
+  qk_positional_embedding:
+    type: RotaryPE
   num_heads: 12
   attn_dropout: 0.1
   resid_dropout: 0.1

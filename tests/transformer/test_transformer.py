@@ -4,22 +4,54 @@ from torch.nn import functional as F
 
 from lm_builder.attention import (
     AttentionConfig,
+    AttentionLayerConfig,
     CausalMultiHeadAttention,
 )
 from lm_builder.ffn import FeedForward, FeedForwardConfig
 from lm_builder.normalizers import RMSNorm
-from lm_builder.positional_embeddings import AbsolutePE, RotaryPE
+from lm_builder.positional_embeddings import (
+    AbsolutePE,
+    PositionalEmbeddingConfig,
+    RotaryPE,
+)
 from lm_builder.transformer import Transformer, TransformerConfig
 
 
-def build_attention_configs(num_layers=1, **kwargs):
-    return [
-        AttentionConfig(
-            attention_type=CausalMultiHeadAttention,
-            **kwargs,
-        )
-        for _ in range(num_layers)
-    ]
+class RecordingQKPositionalEmbedding(torch.nn.Module):
+    def __init__(self, *_args):
+        super().__init__()
+        self.scale = torch.nn.Parameter(torch.ones(()))
+        self.prepare_calls = 0
+        self.apply_qk_calls = 0
+        self.position_ids = None
+
+    def prepare(self, _x, position_ids):
+        self.prepare_calls += 1
+        self.position_ids = position_ids.clone()
+        return self
+
+    @staticmethod
+    def apply_qk(query, key, position_data):
+        position_data.apply_qk_calls += 1
+        return query * position_data.scale, key * position_data.scale
+
+
+def build_attention_configs(
+    num_layers=1,
+    qk_positional_embedding=None,
+    attention_type=CausalMultiHeadAttention,
+    **kwargs,
+):
+    return AttentionConfig(
+        qk_positional_embedding=qk_positional_embedding,
+        layers=[
+            AttentionLayerConfig(
+                attention_type=attention_type,
+                **kwargs,
+            )
+            for _ in range(num_layers)
+        ],
+    )
 
 
 def build_transformer(tie_word_embeddings=False):
@@ -82,6 +114,122 @@ def test_forward_computes_cross_entropy_per_token():
     assert model.lm_head.weight.grad is not None
 
 
+def test_qk_positional_embedding_prepares_once_and_applies_per_layer():
+    positional_embedding_config = PositionalEmbeddingConfig(
+        positional_embedding_type=RecordingQKPositionalEmbedding
+    )
+    config = TransformerConfig(
+        embedding_dimension=8,
+        context_length=4,
+        attention_config=build_attention_configs(
+            num_layers=3,
+            qk_positional_embedding=positional_embedding_config,
+            context_length=4,
+            embedding_dimension=8,
+            num_heads=2,
+        ),
+        ffn_config=FeedForwardConfig(
+            embedding_dimension=8,
+            intermediate_dimension=16,
+            ffn_type=FeedForward,
+        ),
+        vocab_size=10,
+        num_layers=3,
+    )
+    model = Transformer(config)
+    second_model = Transformer(config)
+
+    model_position = model.qk_positional_embedding
+    model(torch.tensor([[1, 2, 3], [4, 5, 6]]))
+
+    assert model_position is not second_model.qk_positional_embedding
+    assert (
+        model_position.scale.data_ptr()
+        != second_model.qk_positional_embedding.scale.data_ptr()
+    )
+    assert model_position.prepare_calls == 1
+    assert model_position.apply_qk_calls == 3
+    assert torch.equal(
+        model_position.position_ids,
+        torch.tensor([[0, 1, 2], [0, 1, 2]]),
+    )
+    visited_modules = []
+    model.apply(visited_modules.append)
+    assert model_position in visited_modules
+    assert all(
+        block.attn.qk_positional_embedding is model_position for block in model.blocks
+    )
+    assert {key for key in model.state_dict() if key.endswith("scale")} == {
+        "qk_positional_embedding.scale",
+        "blocks.0.attn.qk_positional_embedding.scale",
+        "blocks.1.attn.qk_positional_embedding.scale",
+        "blocks.2.attn.qk_positional_embedding.scale",
+    }
+
+
+def test_custom_attention_constructor_accepts_qk_positional_embedding():
+    class CustomAttention(CausalMultiHeadAttention):
+        def __init__(self, config, qk_positional_embedding=None):
+            super().__init__(
+                config,
+                qk_positional_embedding=qk_positional_embedding,
+            )
+
+    model = Transformer(
+        TransformerConfig(
+            embedding_dimension=8,
+            context_length=4,
+            attention_config=build_attention_configs(
+                attention_type=CustomAttention,
+                context_length=4,
+                embedding_dimension=8,
+                num_heads=2,
+            ),
+            ffn_config=FeedForwardConfig(
+                embedding_dimension=8,
+                intermediate_dimension=16,
+                ffn_type=FeedForward,
+            ),
+            vocab_size=10,
+            num_layers=1,
+        )
+    )
+
+    assert isinstance(model.blocks[0].attn, CustomAttention)
+
+
+def test_masked_rotary_forward_compiles_as_one_full_graph():
+    model = Transformer(
+        TransformerConfig(
+            embedding_dimension=8,
+            context_length=4,
+            attention_config=build_attention_configs(
+                qk_positional_embedding=PositionalEmbeddingConfig(
+                    positional_embedding_type=RotaryPE
+                ),
+                context_length=4,
+                embedding_dimension=8,
+                num_heads=2,
+            ),
+            ffn_config=FeedForwardConfig(
+                embedding_dimension=8,
+                intermediate_dimension=16,
+                ffn_type=FeedForward,
+            ),
+            vocab_size=10,
+            num_layers=1,
+        )
+    ).eval()
+    input_ids = torch.tensor([[1, 2, 3, 4]])
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+
+    expected = model(input_ids, attention_mask=attention_mask)
+    compiled = torch.compile(model, backend="eager", fullgraph=True)
+    actual = compiled(input_ids, attention_mask=attention_mask)
+
+    torch.testing.assert_close(actual[0], expected[0])
+
+
 def test_transformer_builds_self_contained_branch_configs():
     config = TransformerConfig.build_config(
         {
@@ -129,8 +277,11 @@ def test_transformer_builds_self_contained_branch_configs():
 
     assert isinstance(block.attn, CausalMultiHeadAttention)
     assert isinstance(block.ffn, FeedForward)
-    assert config.attention_config[0].context_length == config.context_length
-    assert config.attention_config[0].embedding_dimension == config.embedding_dimension
+    assert config.attention_config.layers[0].context_length == config.context_length
+    assert (
+        config.attention_config.layers[0].embedding_dimension
+        == config.embedding_dimension
+    )
     assert config.ffn_config.embedding_dimension == config.embedding_dimension
     assert isinstance(block.attn_norm, torch.nn.LayerNorm)
     assert block.attn_norm.eps == 1e-4
@@ -207,7 +358,7 @@ def test_feed_forward_config_requires_type():
 def test_transformer_requires_one_attention_config_per_layer():
     with pytest.raises(
         ValueError,
-        match="one AttentionConfig per layer",
+        match="one AttentionLayerConfig per layer",
     ):
         TransformerConfig(
             embedding_dimension=8,
@@ -243,15 +394,17 @@ def test_example_configs_use_resolved_module_configs(
 ):
     config = TransformerConfig.from_yml(config_path)
 
-    assert len(config.attention_config) == expected_layers
-    assert all(layer.attention_type is not None for layer in config.attention_config)
+    assert len(config.attention_config.layers) == expected_layers
+    assert all(
+        layer.attention_type is not None for layer in config.attention_config.layers
+    )
     assert all(
         layer.context_length == config.context_length
-        for layer in config.attention_config
+        for layer in config.attention_config.layers
     )
     assert all(
         layer.embedding_dimension == config.embedding_dimension
-        for layer in config.attention_config
+        for layer in config.attention_config.layers
     )
     assert config.ffn_config.embedding_dimension == config.embedding_dimension
     assert config.ffn_config.ffn_type is not None
@@ -268,7 +421,11 @@ def test_left_padding_does_not_change_content_logits(
         context_length=4,
         embedding_dimension=8,
         num_heads=2,
-        positional_embedding=RotaryPE if position_type == "rotary" else None,
+        qk_positional_embedding=(
+            PositionalEmbeddingConfig(positional_embedding_type=RotaryPE)
+            if position_type == "rotary"
+            else None
+        ),
     )
     model = Transformer(
         TransformerConfig(

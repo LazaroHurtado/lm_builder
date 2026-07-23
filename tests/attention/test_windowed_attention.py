@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from lm_builder.attention import (
-    AttentionConfig,
+    AttentionLayerConfig,
     CausalMultiHeadAttention,
     GroupedQueryAttention,
     MultiHeadAttention,
@@ -20,7 +20,7 @@ from lm_builder.attention import (
 )
 def test_causal_attention_builds_windowed_mask(attention_type):
     attention = attention_type(
-        AttentionConfig(
+        AttentionLayerConfig(
             context_length=5,
             embedding_dimension=8,
             num_heads=4,
@@ -52,7 +52,7 @@ def test_causal_attention_builds_windowed_mask(attention_type):
 
 def test_windowed_mask_aligns_cached_queries_to_the_end():
     attention = GroupedQueryAttention(
-        AttentionConfig(
+        AttentionLayerConfig(
             context_length=5,
             embedding_dimension=8,
             num_heads=4,
@@ -78,7 +78,7 @@ def test_windowed_mask_aligns_cached_queries_to_the_end():
 
 def test_causal_attention_without_window_builds_full_triangle():
     attention = GroupedQueryAttention(
-        AttentionConfig(
+        AttentionLayerConfig(
             context_length=4,
             embedding_dimension=8,
             num_heads=4,
@@ -100,7 +100,7 @@ def test_causal_attention_without_window_builds_full_triangle():
 
 def test_windowed_attention_uses_only_the_current_window():
     attention = CausalMultiHeadAttention(
-        AttentionConfig(
+        AttentionLayerConfig(
             context_length=4,
             embedding_dimension=1,
             num_heads=1,
@@ -130,7 +130,7 @@ def test_attention_config_rejects_invalid_window_size(window_size):
         ValueError,
         match="window_size must be a positive integer or None",
     ):
-        AttentionConfig(
+        AttentionLayerConfig(
             context_length=4,
             embedding_dimension=8,
             num_heads=2,
@@ -141,7 +141,7 @@ def test_attention_config_rejects_invalid_window_size(window_size):
 
 def test_attention_does_not_register_context_sized_mask():
     attention = CausalMultiHeadAttention(
-        AttentionConfig(
+        AttentionLayerConfig(
             context_length=32_768,
             embedding_dimension=8,
             num_heads=2,
@@ -161,7 +161,7 @@ def test_noncausal_attention_cannot_enable_window_support_directly():
         match="NonCausalWindowAttention does not support window_size",
     ):
         NonCausalWindowAttention(
-            AttentionConfig(
+            AttentionLayerConfig(
                 context_length=4,
                 embedding_dimension=8,
                 num_heads=2,

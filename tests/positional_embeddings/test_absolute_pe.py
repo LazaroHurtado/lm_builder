@@ -1,6 +1,10 @@
 import torch
 
-from lm_builder.attention import AttentionConfig, CausalMultiHeadAttention
+from lm_builder.attention import (
+    AttentionConfig,
+    AttentionLayerConfig,
+    CausalMultiHeadAttention,
+)
 from lm_builder.ffn import FeedForward, FeedForwardConfig
 from lm_builder.positional_embeddings import AbsolutePE, LearnablePE
 from lm_builder.transformer import Transformer, TransformerConfig
@@ -19,14 +23,17 @@ def build_transformer(positional_embedding):
         TransformerConfig(
             embedding_dimension=EMBEDDING_DIM,
             context_length=CONTEXT_LENGTH,
-            attention_config=[
-                AttentionConfig(
-                    context_length=CONTEXT_LENGTH,
-                    embedding_dimension=EMBEDDING_DIM,
-                    num_heads=2,
-                    attention_type=CausalMultiHeadAttention,
-                )
-            ],
+            attention_config=AttentionConfig(
+                qk_positional_embedding=None,
+                layers=[
+                    AttentionLayerConfig(
+                        context_length=CONTEXT_LENGTH,
+                        embedding_dimension=EMBEDDING_DIM,
+                        num_heads=2,
+                        attention_type=CausalMultiHeadAttention,
+                    )
+                ],
+            ),
             ffn_config=FeedForwardConfig(
                 embedding_dimension=EMBEDDING_DIM,
                 intermediate_dimension=12,
@@ -37,6 +44,12 @@ def build_transformer(positional_embedding):
             positional_embedding=positional_embedding,
         )
     )
+
+
+class RecordingLearnablePE(LearnablePE):
+    def forward(self, input, position_ids=None):  # pylint: disable=redefined-builtin
+        self.last_position_ids = position_ids
+        return super().forward(input, position_ids=position_ids)
 
 
 def test_absolute_pe_is_reused_by_configuration():
@@ -104,6 +117,29 @@ def test_learnable_pe_supports_explicit_positions():
     output = positional_embedding(x, position_ids=position_ids)
 
     torch.testing.assert_close(output, positional_embedding.weight[position_ids])
+
+
+def test_transformer_generates_implicit_input_positions():
+    model = build_transformer(RecordingLearnablePE)
+
+    model(torch.tensor([[1, 2, 3], [4, 5, 6]]))
+
+    torch.testing.assert_close(
+        model.wpe.last_position_ids,
+        torch.tensor([[0, 1, 2], [0, 1, 2]]),
+    )
+
+
+def test_transformer_passes_explicit_input_positions():
+    model = build_transformer(RecordingLearnablePE)
+    position_ids = torch.tensor([[0, 2, 3], [1, 2, 4]])
+
+    model(
+        torch.tensor([[1, 2, 3], [4, 5, 6]]),
+        position_ids=position_ids,
+    )
+
+    torch.testing.assert_close(model.wpe.last_position_ids, position_ids)
 
 
 def test_gpt2_uses_learnable_pe():

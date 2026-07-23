@@ -22,6 +22,9 @@ there is more than one entry; it contains one positive integer per entry:
 context_length: 16384
 embedding_dimension: 4096
 attention_config:
+  qk_positional_embedding:
+    type: RotaryPE
+    base: 10000.0
   num_heads: 32
   norm:
     type: RMSNorm
@@ -43,14 +46,25 @@ layers. `num_layers` must be divisible by the sum of `ratio`. A single entry
 does not require `ratio`. `TransformerConfig` injects the top-level
 `context_length` and `embedding_dimension` into every resolved attention config,
 and injects `embedding_dimension` into the feed-forward config. Loading this
-schema through `AttentionConfig.from_yml()` returns one independent, fully
-resolved `AttentionConfig` for each transformer layer.
+schema through `AttentionConfig.from_yml()` returns an `AttentionConfig` containing
+one `PositionalEmbeddingConfig` and an independent `AttentionLayerConfig` for
+every transformer layer. Positional embedding fields other than `type` are stored
+as constructor keyword arguments. `Transformer` uses that config to build one
+shared positional embedding instance for the model.
 
 `norm` configures residual-stream normalization before attention. Optional
 `qk_norm` builds independent query and key normalizers over each head's
 `head_dim`. They run after head shaping and before positional embeddings, KV
 caching, and GQA/MQA key-value head sharing. Values are not normalized. Omit
 `qk_norm` to preserve the original attention behavior and parameter layout.
+
+Q/K positional embeddings use a two-phase interface. `Transformer.forward()`
+calls `prepare()` once to create position data shared by the full layer stack.
+The configured embedding is bound to each attention module during construction,
+so layer `forward()` calls receive only that prepared position data. Each layer
+then calls `apply_qk()` to transform its own query and key tensors. RoPE therefore
+computes its cosines and sines once per model forward without storing mutable
+position tables.
 
 ### Tied input and output embeddings
 

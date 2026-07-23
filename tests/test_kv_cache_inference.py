@@ -33,10 +33,12 @@ def build_model(
         if isinstance(window_size, list)
         else [window_size] * len(attention_types)
     )
-    attention_config = AttentionConfig.build_configs(
+    attention_config = AttentionConfig.build_config(
         {
             "num_heads": 4,
-            "positional_embedding": (RotaryPE if position_type == "rotary" else None),
+            "qk_positional_embedding": (
+                {"type": RotaryPE} if position_type == "rotary" else None
+            ),
             "qk_norm": qk_norm,
             "layers": [
                 {
@@ -128,6 +130,25 @@ def test_cached_decode_matches_full_forward(
         atol=1e-5,
         rtol=1e-5,
     )
+
+
+def test_cached_rotary_decode_preserves_key_value_dtype_under_autocast():
+    model = build_model()
+    kv_caches = [KVCache(capacity=model.context_length) for _ in model.blocks]
+
+    with torch.inference_mode(), torch.autocast("cpu", dtype=torch.bfloat16):
+        model(
+            torch.tensor([[1, 2, 3]]),
+            _kv_caches=kv_caches,
+        )
+        model(
+            torch.tensor([[4]]),
+            _kv_caches=kv_caches,
+        )
+
+    for cache in kv_caches:
+        assert cache.k.dtype == torch.bfloat16
+        assert cache.v.dtype == torch.bfloat16
 
 
 def test_generate_prefills_once_then_decodes_single_tokens():

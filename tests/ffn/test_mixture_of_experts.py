@@ -4,7 +4,11 @@ import pytest
 import torch
 from torch import nn
 
-from lm_builder.attention import AttentionConfig, CausalMultiHeadAttention
+from lm_builder.attention import (
+    AttentionConfig,
+    AttentionLayerConfig,
+    CausalMultiHeadAttention,
+)
 from lm_builder.ffn import FeedForwardConfig, MixtureOfExperts
 from lm_builder.transformer import Transformer, TransformerConfig
 
@@ -348,14 +352,17 @@ def test_transformer_returns_top_one_routing_loss():
         TransformerConfig(
             embedding_dimension=8,
             context_length=4,
-            attention_config=[
-                AttentionConfig(
-                    context_length=4,
-                    embedding_dimension=8,
-                    num_heads=2,
-                    attention_type=CausalMultiHeadAttention,
-                )
-            ],
+            attention_config=AttentionConfig(
+                qk_positional_embedding=None,
+                layers=[
+                    AttentionLayerConfig(
+                        context_length=4,
+                        embedding_dimension=8,
+                        num_heads=2,
+                        attention_type=CausalMultiHeadAttention,
+                    )
+                ],
+            ),
             ffn_config=ffn_config,
             vocab_size=16,
             num_layers=1,
@@ -386,14 +393,17 @@ def test_transformer_routing_loss_ignores_left_padding():
         TransformerConfig(
             embedding_dimension=8,
             context_length=4,
-            attention_config=[
-                AttentionConfig(
-                    context_length=4,
-                    embedding_dimension=8,
-                    num_heads=2,
-                    attention_type=CausalMultiHeadAttention,
-                )
-            ],
+            attention_config=AttentionConfig(
+                qk_positional_embedding=None,
+                layers=[
+                    AttentionLayerConfig(
+                        context_length=4,
+                        embedding_dimension=8,
+                        num_heads=2,
+                        attention_type=CausalMultiHeadAttention,
+                    )
+                ],
+            ),
             ffn_config=FeedForwardConfig(
                 embedding_dimension=8,
                 intermediate_dimension=16,

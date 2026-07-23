@@ -5,8 +5,8 @@ from typing import List, Optional, Type
 
 from torch import nn
 
-from .. import positional_embeddings
 from ..normalizers import NormalizerConfig
+from ..positional_embeddings import PositionalEmbeddingConfig
 from ..utils import is_positive_integer, load_yml, module_has_attr
 
 
@@ -63,7 +63,7 @@ def _merge_layer_config(shared_config, layer):
 
 
 @dataclass
-class AttentionConfig:
+class AttentionLayerConfig:
     context_length: int
     embedding_dimension: int
     num_heads: int
@@ -73,8 +73,6 @@ class AttentionConfig:
     bias: bool = False
     attn_dropout: float = 0.0
     resid_dropout: float = 0.0
-    positional_embedding: Optional[Type] = None
-    inv_freq: float = 10_000.0
     norm: NormalizerConfig = field(default_factory=NormalizerConfig)
     qk_norm: Optional[NormalizerConfig] = None
     head_dim: Optional[int] = None
@@ -85,7 +83,10 @@ class AttentionConfig:
         if self.window_size is not None and not is_positive_integer(self.window_size):
             raise ValueError("window_size must be a positive integer or None.")
 
-    def clone(self) -> AttentionConfig:
+        if self.head_dim is None:
+            self.head_dim = self.embedding_dimension // self.num_heads
+
+    def clone(self) -> AttentionLayerConfig:
         return replace(
             self,
             norm=self.norm.clone(),
@@ -93,24 +94,9 @@ class AttentionConfig:
         )
 
     @staticmethod
-    def from_yml(file: str) -> List[AttentionConfig]:
-        config = load_yml(file)
+    def build_config(config: dict) -> AttentionLayerConfig:
         if not isinstance(config, dict):
-            raise TypeError("Model config must be a mapping.")
-
-        return AttentionConfig.build_configs(
-            config["attention_config"],
-            config["num_layers"],
-            config["context_length"],
-            config["embedding_dimension"],
-        )
-
-    @staticmethod
-    def build_config(config: dict) -> AttentionConfig:
-        if not isinstance(config, dict):
-            raise TypeError("Attention config must be a mapping.")
-
-        config = dict(config)
+            raise TypeError("Attention layer config must be a mapping.")
 
         # Imported here to avoid importing the package while it is still
         # initializing this config module.
@@ -125,24 +111,58 @@ class AttentionConfig:
         if "type" in config:
             config["attention_type"] = config["type"]
 
-        config = module_has_attr(
-            config, "positional_embedding", positional_embeddings, nn
-        )
         config["norm"] = NormalizerConfig.build_config(config.get("norm"))
         if config.get("qk_norm") is not None:
             config["qk_norm"] = NormalizerConfig.build_config(config["qk_norm"])
 
-        config = _filter_config_fields(config, AttentionConfig)
+        config = _filter_config_fields(config, AttentionLayerConfig)
 
-        return AttentionConfig(**config)
+        return AttentionLayerConfig(**config)
+
+
+@dataclass
+class AttentionConfig:
+    qk_positional_embedding: Optional[PositionalEmbeddingConfig]
+    layers: List[AttentionLayerConfig]
+
+    def __post_init__(self):
+        if self.qk_positional_embedding is None:
+            return
+        if not isinstance(
+            self.qk_positional_embedding,
+            PositionalEmbeddingConfig,
+        ):
+            raise TypeError(
+                "qk_positional_embedding must be a PositionalEmbeddingConfig."
+            )
+
+        head_dims = {layer.head_dim for layer in self.layers}
+        if len(head_dims) != 1:
+            raise ValueError(
+                "All attention layers must use the same head dimension when "
+                "qk_positional_embedding is configured."
+            )
 
     @staticmethod
-    def build_configs(
+    def from_yml(file: str) -> AttentionConfig:
+        config = load_yml(file)
+        if not isinstance(config, dict):
+            raise TypeError("Model config must be a mapping.")
+
+        return AttentionConfig.build_config(
+            config["attention_config"],
+            config["num_layers"],
+            config["context_length"],
+            config["embedding_dimension"],
+        )
+
+    @staticmethod
+    def build_config(
         config: dict,
         num_layers: int,
         context_length: int,
         embedding_dimension: int,
-    ) -> List[AttentionConfig]:
+    ) -> AttentionConfig:
         if not isinstance(config, dict):
             raise TypeError("attention_config must be a mapping.")
         if not is_positive_integer(num_layers):
@@ -154,17 +174,23 @@ class AttentionConfig:
             raise ValueError("attention_config.layers must be a non-empty list.")
         ratio = _resolve_ratio(layers, config.get("ratio"))
 
+        qk_positional_embedding_config = None
+        if config.get("qk_positional_embedding") is not None:
+            qk_positional_embedding_config = PositionalEmbeddingConfig.build_config(
+                config.get("qk_positional_embedding")
+            )
+
         shared_config = {
             key: value
             for key, value in config.items()
-            if key not in {"layers", "ratio"}
+            if key not in {"layers", "qk_positional_embedding", "ratio"}
         }
         resolved_layers = []
         for layer in layers:
             layer_config = _merge_layer_config(shared_config, layer)
             layer_config["context_length"] = context_length
             layer_config["embedding_dimension"] = embedding_dimension
-            resolved_layers.append(AttentionConfig.build_config(layer_config))
+            resolved_layers.append(AttentionLayerConfig.build_config(layer_config))
 
         pattern = [
             layer
@@ -176,7 +202,11 @@ class AttentionConfig:
                 "num_layers must be divisible by the sum of attention_config.ratio."
             )
 
-        return [
+        resolved_layers = [
             pattern[layer_index % len(pattern)].clone()
             for layer_index in range(num_layers)
         ]
+        return AttentionConfig(
+            qk_positional_embedding=qk_positional_embedding_config,
+            layers=resolved_layers,
+        )

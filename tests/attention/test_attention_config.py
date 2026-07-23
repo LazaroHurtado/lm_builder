@@ -3,11 +3,16 @@ from torch import nn
 
 from lm_builder.attention import (
     AttentionConfig,
+    AttentionLayerConfig,
     CausalMultiHeadAttention,
     GroupedQueryAttention,
     MultiHeadAttention,
 )
 from lm_builder.normalizers import RMSNorm
+from lm_builder.positional_embeddings import (
+    PositionalEmbeddingConfig,
+    RotaryPE,
+)
 
 
 def build_attention_configs(num_layers=1, **overrides):
@@ -27,7 +32,21 @@ def build_attention_configs(num_layers=1, **overrides):
         ],
     }
     config.update(overrides)
-    return AttentionConfig.build_configs(
+    return AttentionConfig.build_config(
+        config,
+        num_layers,
+        context_length=8,
+        embedding_dimension=16,
+    ).layers
+
+
+def build_attention_config(num_layers=1, **overrides):
+    config = {
+        "num_heads": 4,
+        "layers": [{"type": "CausalMultiHeadAttention"}],
+    }
+    config.update(overrides)
+    return AttentionConfig.build_config(
         config,
         num_layers,
         context_length=8,
@@ -49,7 +68,6 @@ def test_build_configs_resolves_shared_values_and_layer_overrides():
             },
             {
                 "type": "CausalMultiHeadAttention",
-                "positional_embedding": None,
             },
         ],
     )
@@ -328,7 +346,7 @@ def test_noncausal_attention_cannot_opt_into_window_size():
     class NonCausalWindowAttention(MultiHeadAttention):
         supports_window_size = True
 
-    config = AttentionConfig(
+    config = AttentionLayerConfig(
         context_length=8,
         embedding_dimension=16,
         num_heads=4,
@@ -355,7 +373,45 @@ def test_attention_type_retains_torch_nn_fallback():
     assert configs[0].attention_type is nn.Identity
 
 
-def test_from_yml_returns_one_resolved_config_per_transformer_layer(tmp_path):
+def test_qk_positional_embedding_config_is_resolved_from_nested_config():
+    config = build_attention_config(
+        qk_positional_embedding={
+            "type": "RotaryPE",
+            "base": 1_000_000.0,
+        },
+    )
+
+    assert isinstance(
+        config.qk_positional_embedding,
+        PositionalEmbeddingConfig,
+    )
+    assert config.qk_positional_embedding.positional_embedding_type is RotaryPE
+    assert config.qk_positional_embedding.kwargs == {"base": 1_000_000.0}
+
+
+def test_qk_positional_embedding_requires_uniform_head_dimension():
+    with pytest.raises(
+        ValueError,
+        match="same head dimension",
+    ):
+        build_attention_config(
+            num_layers=2,
+            qk_positional_embedding={"type": "RotaryPE"},
+            ratio=[1, 1],
+            layers=[
+                {
+                    "type": "CausalMultiHeadAttention",
+                    "head_dim": 4,
+                },
+                {
+                    "type": "CausalMultiHeadAttention",
+                    "head_dim": 6,
+                },
+            ],
+        )
+
+
+def test_from_yml_returns_resolved_attention_config(tmp_path):
     config_path = tmp_path / "model.yml"
     config_path.write_text(
         """
@@ -373,9 +429,10 @@ num_layers: 3
         encoding="utf-8",
     )
 
-    configs = AttentionConfig.from_yml(config_path)
+    config = AttentionConfig.from_yml(config_path)
 
-    assert [config.attention_type for config in configs] == [
+    assert config.qk_positional_embedding is None
+    assert [layer.attention_type for layer in config.layers] == [
         GroupedQueryAttention,
         GroupedQueryAttention,
         CausalMultiHeadAttention,
@@ -399,7 +456,7 @@ num_layers: 2
         encoding="utf-8",
     )
 
-    configs = AttentionConfig.from_yml(config_path)
+    config = AttentionConfig.from_yml(config_path)
 
-    assert [config.head_dim for config in configs] == [6, 6]
-    assert configs[0] is not configs[1]
+    assert [layer.head_dim for layer in config.layers] == [6, 6]
+    assert config.layers[0] is not config.layers[1]

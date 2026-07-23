@@ -1,7 +1,8 @@
 context_length: 512
 embedding_dimension: 4096
 attention_config:
-  positional_embedding: RotaryPE
+  qk_positional_embedding:
+    type: RotaryPE
   num_heads: 32
   norm:
     type: RMSNorm

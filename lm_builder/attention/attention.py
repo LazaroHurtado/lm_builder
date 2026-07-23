@@ -1,7 +1,7 @@
 from abc import abstractmethod
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 
 class Attention(nn.Module):
@@ -10,7 +10,7 @@ class Attention(nn.Module):
         self,
         x: torch.Tensor,
         attention_mask=None,
-        position_ids=None,
+        qk_position_data=None,
         kv_cache=None,
     ): ...
 

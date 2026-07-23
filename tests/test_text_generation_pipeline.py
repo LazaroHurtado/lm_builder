@@ -6,6 +6,7 @@ from torch import nn
 from lm_builder import TextGenerationPipeline
 from lm_builder.attention import (
     AttentionConfig,
+    AttentionLayerConfig,
     CausalMultiHeadAttention,
 )
 from lm_builder.ffn import FeedForward, FeedForwardConfig
@@ -36,14 +37,17 @@ def build_config(context_length=8):
     return TransformerConfig(
         embedding_dimension=8,
         context_length=context_length,
-        attention_config=[
-            AttentionConfig(
-                context_length=context_length,
-                embedding_dimension=8,
-                num_heads=2,
-                attention_type=CausalMultiHeadAttention,
-            )
-        ],
+        attention_config=AttentionConfig(
+            qk_positional_embedding=None,
+            layers=[
+                AttentionLayerConfig(
+                    context_length=context_length,
+                    embedding_dimension=8,
+                    num_heads=2,
+                    attention_type=CausalMultiHeadAttention,
+                )
+            ],
+        ),
         ffn_config=FeedForwardConfig(
             embedding_dimension=8,
             intermediate_dimension=16,

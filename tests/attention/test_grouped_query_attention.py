@@ -1,12 +1,12 @@
 import torch
 
-from lm_builder.attention import AttentionConfig, GroupedQueryAttention
+from lm_builder.attention import AttentionLayerConfig, GroupedQueryAttention
 from lm_builder.inference import KVCache
 
 
 def test_grouped_query_attention_shares_key_value_heads():
     attention = GroupedQueryAttention(
-        AttentionConfig(
+        AttentionLayerConfig(
             context_length=4,
             embedding_dimension=8,
             num_heads=4,
@@ -44,7 +44,7 @@ def test_grouped_query_attention_shares_key_value_heads():
 
 def test_grouped_query_attention_and_kv_cache_use_explicit_head_dimension():
     attention = GroupedQueryAttention(
-        AttentionConfig(
+        AttentionLayerConfig(
             context_length=4,
             embedding_dimension=8,
             num_heads=4,

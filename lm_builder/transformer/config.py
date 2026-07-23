@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Type
+from typing import Optional, Type
 
 from torch import nn
 
@@ -13,7 +13,7 @@ from lm_builder.utils import is_positive_integer, load_yml, module_has_attr
 class TransformerConfig:
     embedding_dimension: int
     context_length: int
-    attention_config: List[attention.AttentionConfig]
+    attention_config: attention.AttentionConfig
     ffn_config: ffn.FeedForwardConfig
     vocab_size: int
     num_layers: int
@@ -34,9 +34,10 @@ class TransformerConfig:
             raise ValueError("context_length must be a positive integer.")
         if not is_positive_integer(self.num_layers):
             raise ValueError("num_layers must be a positive integer.")
-        if len(self.attention_config) != self.num_layers:
+        if len(self.attention_config.layers) != self.num_layers:
             raise ValueError(
-                "attention_config must contain one AttentionConfig per layer."
+                "attention_config.layers must contain one "
+                "AttentionLayerConfig per layer."
             )
 
     @staticmethod
@@ -52,7 +53,7 @@ class TransformerConfig:
         )
         config = module_has_attr(config, "token_embedding", nn)
 
-        config["attention_config"] = attention.AttentionConfig.build_configs(
+        config["attention_config"] = attention.AttentionConfig.build_config(
             config["attention_config"],
             config["num_layers"],
             config["context_length"],

@@ -8,7 +8,7 @@ from torch.nn import functional as F
 
 from ..inference import KVCache
 from .attention import Attention
-from .config import AttentionConfig
+from .config import AttentionLayerConfig
 
 
 class MultiHeadAttention(Attention):
@@ -16,7 +16,11 @@ class MultiHeadAttention(Attention):
     supports_window_size = False
     is_causal = False
 
-    def __init__(self, config: AttentionConfig):
+    def __init__(
+        self,
+        config: AttentionLayerConfig,
+        qk_positional_embedding=None,
+    ):
         super().__init__()
         if config.window_size is not None and (
             not self.supports_window_size or not self.is_causal
@@ -27,12 +31,8 @@ class MultiHeadAttention(Attention):
         self.embedding_dim = config.embedding_dimension
         self.num_heads = config.num_heads
         self.window_size = config.window_size
-
-        if config.head_dim is None:
-            assert config.embedding_dimension % config.num_heads == 0
-            self.head_dim = self.embedding_dim // self.num_heads
-        else:
-            self.head_dim = config.head_dim
+        self.qk_positional_embedding = qk_positional_embedding
+        self.head_dim = config.head_dim
 
         self.kv_heads = self._get_num_kv_heads(config)
         assert (
@@ -57,15 +57,9 @@ class MultiHeadAttention(Attention):
         self.attn_dropout = nn.Dropout(config.attn_dropout)
         self.resid_dropout = nn.Dropout(config.resid_dropout)
 
-        self.has_positional_embedding = config.positional_embedding is not None
-        if self.has_positional_embedding:
-            self.pos_emb = config.positional_embedding(
-                self.head_dim, config.context_length, config.inv_freq
-            )
-
         self.has_flash_attn = hasattr(F, "scaled_dot_product_attention")
 
-    def _get_num_kv_heads(self, config: AttentionConfig):
+    def _get_num_kv_heads(self, config: AttentionLayerConfig):
         return config.num_heads
 
     def get_qkv(self, x: torch.Tensor):
@@ -182,7 +176,7 @@ class MultiHeadAttention(Attention):
         query: torch.Tensor,
         key: torch.Tensor,
         value: torch.Tensor,
-        attention_mask,
+        attention_mask=None,
     ):
         # (B, num_heads, T, head_dim) @ (B, num_heads, head_dim, T) -> (B, num_heads, T, T)
         scale = 1.0 / math.sqrt(key.size(dim=-1))
@@ -192,7 +186,8 @@ class MultiHeadAttention(Attention):
         # to zero we will replace the matrix's element at
         # that position with -inf. We use -inf so when we apply
         # softmax those elements will equal to 0.
-        attn = attn.masked_fill(~attention_mask, float("-inf"))
+        if attention_mask is not None:
+            attn = attn.masked_fill(~attention_mask, float("-inf"))
         attn = F.softmax(attn, dim=-1)
 
         attn = self.attn_dropout(attn)
@@ -204,7 +199,7 @@ class MultiHeadAttention(Attention):
         self,
         x,
         attention_mask=None,
-        position_ids=None,
+        qk_position_data=None,
         kv_cache: KVCache = None,
     ):
         if kv_cache is not None:
@@ -228,8 +223,8 @@ class MultiHeadAttention(Attention):
             q = self.q_norm(q).to(dtype=q.dtype)
             k = self.k_norm(k).to(dtype=k.dtype)
 
-        if self.has_positional_embedding:
-            q, k = self.pos_emb(q, k, position_ids=position_ids)
+        if self.qk_positional_embedding is not None:
+            q, k = self.qk_positional_embedding.apply_qk(q, k, qk_position_data)
 
         if kv_cache is not None:
             k, v = kv_cache.update(k, v)

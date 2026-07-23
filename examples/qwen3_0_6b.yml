@@ -1,6 +1,7 @@
 attention_config:
-  positional_embedding: RotaryPE
-  inv_freq: 1000000.0
+  qk_positional_embedding:
+    type: RotaryPE
+    base: 1000000.0
   num_heads: 16
   head_dim: 128
   bias: false

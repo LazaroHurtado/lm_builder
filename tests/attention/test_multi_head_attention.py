@@ -4,7 +4,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from lm_builder.attention import (
-    AttentionConfig,
+    AttentionLayerConfig,
     CausalMultiHeadAttention,
     GroupedQueryAttention,
     MultiQueryAttention,
@@ -14,14 +14,18 @@ from lm_builder.normalizers import NormalizerConfig, RMSNorm
 
 
 class RecordingPositionalEmbedding(nn.Module):
-    def __init__(self, *_):
+    def __init__(self):
         super().__init__()
         self.query = None
         self.key = None
 
-    def forward(self, query, key, **_):
-        self.query = query.detach().clone()
-        self.key = key.detach().clone()
+    def prepare(self, *_args):
+        return self
+
+    @staticmethod
+    def apply_qk(query, key, position_data):
+        position_data.query = query.detach().clone()
+        position_data.key = key.detach().clone()
         return query, key
 
 
@@ -38,7 +42,7 @@ def test_scaled_dot_product_attention_dropout_respects_module_mode(monkeypatch):
         scaled_dot_product_attention,
     )
     attention = CausalMultiHeadAttention(
-        AttentionConfig(
+        AttentionLayerConfig(
             context_length=4,
             embedding_dimension=8,
             num_heads=2,
@@ -72,7 +76,7 @@ def test_attention_uses_one_equivalent_qkv_projection(
     torch.manual_seed(17)
     embedding_dimension = 8
     attention = attention_type(
-        AttentionConfig(
+        AttentionLayerConfig(
             context_length=4,
             embedding_dimension=embedding_dimension,
             num_heads=4,
@@ -120,7 +124,7 @@ def test_attention_uses_one_equivalent_qkv_projection(
 
 def test_attention_infers_head_dimension_from_embedding_dimension():
     attention = CausalMultiHeadAttention(
-        AttentionConfig(
+        AttentionLayerConfig(
             context_length=4,
             embedding_dimension=8,
             num_heads=4,
@@ -137,21 +141,23 @@ def test_attention_infers_head_dimension_from_embedding_dimension():
     assert attention(torch.randn(2, 4, 8)).shape == (2, 4, 8)
 
 
-def test_inferred_head_dimension_requires_divisible_embedding_dimension():
-    with pytest.raises(AssertionError):
-        CausalMultiHeadAttention(
-            AttentionConfig(
-                context_length=4,
-                embedding_dimension=10,
-                num_heads=4,
-                attention_type=CausalMultiHeadAttention,
-            )
-        )
+def test_inferred_head_dimension_uses_embedding_to_head_ratio():
+    config = AttentionLayerConfig(
+        context_length=4,
+        embedding_dimension=10,
+        num_heads=4,
+        attention_type=CausalMultiHeadAttention,
+    )
+    attention = CausalMultiHeadAttention(config)
+
+    assert config.head_dim == 2
+    assert attention.head_dim == 2
+    assert attention(torch.randn(2, 4, 10)).shape == (2, 4, 10)
 
 
 def test_explicit_head_dimension_sizes_fused_and_output_projections():
     attention = GroupedQueryAttention(
-        AttentionConfig(
+        AttentionLayerConfig(
             context_length=4,
             embedding_dimension=8,
             num_heads=4,
@@ -190,7 +196,7 @@ def test_attention_builds_independent_per_head_qk_norms(
     kv_heads,
 ):
     attention = attention_type(
-        AttentionConfig(
+        AttentionLayerConfig(
             context_length=4,
             embedding_dimension=8,
             num_heads=4,
@@ -219,16 +225,17 @@ def test_attention_builds_independent_per_head_qk_norms(
 
 
 def test_qk_norm_runs_before_positional_embeddings_and_kv_repetition():
+    positional_embedding = RecordingPositionalEmbedding()
     attention = GroupedQueryAttention(
-        AttentionConfig(
+        AttentionLayerConfig(
             context_length=4,
             embedding_dimension=8,
             num_heads=4,
             attention_type=GroupedQueryAttention,
             kv_heads=2,
-            positional_embedding=RecordingPositionalEmbedding,
             qk_norm=NormalizerConfig.build_config({"type": "RMSNorm"}),
-        )
+        ),
+        qk_positional_embedding=positional_embedding,
     )
     inputs = torch.randn(2, 4, 8)
     with torch.no_grad():
@@ -236,17 +243,20 @@ def test_qk_norm_runs_before_positional_embeddings_and_kv_repetition():
         query, key, _ = attention.get_heads(query, key, value)
         expected_query = attention.q_norm(query)
         expected_key = attention.k_norm(key)
-        attention(inputs)
+        attention(
+            inputs,
+            qk_position_data=positional_embedding,
+        )
 
-    assert attention.pos_emb.query.shape == (2, 4, 4, 2)
-    assert attention.pos_emb.key.shape == (2, 2, 4, 2)
-    torch.testing.assert_close(attention.pos_emb.query, expected_query)
-    torch.testing.assert_close(attention.pos_emb.key, expected_key)
+    assert positional_embedding.query.shape == (2, 4, 4, 2)
+    assert positional_embedding.key.shape == (2, 2, 4, 2)
+    torch.testing.assert_close(positional_embedding.query, expected_query)
+    torch.testing.assert_close(positional_embedding.key, expected_key)
 
 
 def test_qk_norm_adds_no_modules_or_parameters_when_disabled():
     attention = CausalMultiHeadAttention(
-        AttentionConfig(
+        AttentionLayerConfig(
             context_length=4,
             embedding_dimension=8,
             num_heads=4,
@@ -264,7 +274,7 @@ def test_qk_norm_adds_no_modules_or_parameters_when_disabled():
 
 def test_qk_norm_preserves_kv_dtype_during_autocast():
     attention = CausalMultiHeadAttention(
-        AttentionConfig(
+        AttentionLayerConfig(
             context_length=4,
             embedding_dimension=8,
             num_heads=4,
