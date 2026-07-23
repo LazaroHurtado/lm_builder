@@ -3,7 +3,7 @@ name = "lm_builder"
 version = "0.0.1"
 description = "Python framework for building language models"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.11,<3.12"
 authors = [
     { name = "Lazaro Hurtado" }
 ]
@@ -17,6 +17,7 @@ dependencies = [
     "transformers",
     "datasets>=3.1.0",
     "tqdm>=4.67.1",
+    "setuptools>=83.0.0",
 ]
 
 [dependency-groups]

@@ -11,6 +11,7 @@ from lm_builder.utils import change_state_dict_names, combine_qkv_projections
 
 load_dotenv()
 
+
 def get_device():
     if torch.cuda.is_available():
         return torch.device("cuda")
