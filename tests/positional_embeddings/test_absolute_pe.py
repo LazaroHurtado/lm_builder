@@ -14,10 +14,6 @@ EMBEDDING_DIM = 6
 BASE = 10_000.0
 
 
-def setup_function():
-    AbsolutePE.KEY_TO_INSTANCE.clear()
-
-
 def build_transformer(positional_embedding):
     return Transformer(
         TransformerConfig(
@@ -52,36 +48,27 @@ class RecordingLearnablePE(LearnablePE):
         return super().forward(input, position_ids=position_ids)
 
 
-def test_absolute_pe_is_reused_by_configuration():
-    positional_embedding = AbsolutePE(CONTEXT_LENGTH, EMBEDDING_DIM, BASE)
+def test_absolute_pe_instances_are_independent():
+    first = AbsolutePE(CONTEXT_LENGTH, EMBEDDING_DIM, BASE)
+    second = AbsolutePE(CONTEXT_LENGTH, EMBEDDING_DIM, BASE)
 
-    assert AbsolutePE(CONTEXT_LENGTH, EMBEDDING_DIM, BASE) is positional_embedding
-    assert (
-        AbsolutePE(CONTEXT_LENGTH + 1, EMBEDDING_DIM, BASE) is not positional_embedding
-    )
-    assert (
-        AbsolutePE(CONTEXT_LENGTH, EMBEDDING_DIM + 2, BASE) is not positional_embedding
-    )
-    assert (
-        AbsolutePE(CONTEXT_LENGTH, EMBEDDING_DIM, BASE + 1) is not positional_embedding
-    )
+    assert first is not second
+    assert first.weight.data_ptr() != second.weight.data_ptr()
 
 
-def test_absolute_pe_generates_a_constant_table_lazily():
+def test_absolute_pe_uses_a_constant_non_trainable_table():
     positional_embedding = AbsolutePE(CONTEXT_LENGTH, EMBEDDING_DIM, BASE)
     x = torch.zeros(2, 4, EMBEDDING_DIM, dtype=torch.float16)
 
-    assert positional_embedding.weight is None
-
     output = positional_embedding(x)
 
-    assert positional_embedding.weight.device == x.device
-    assert positional_embedding.weight.dtype == x.dtype
+    assert positional_embedding.weight.device.type == "cpu"
+    assert positional_embedding.weight.dtype == torch.float32
     assert not positional_embedding.weight.requires_grad
-    torch.testing.assert_close(output[0], positional_embedding.weight[:4])
-
-    shared_embedding = AbsolutePE(CONTEXT_LENGTH, EMBEDDING_DIM, BASE)
-    assert shared_embedding.weight is positional_embedding.weight
+    torch.testing.assert_close(
+        output[0],
+        positional_embedding.weight[:4].to(dtype=x.dtype),
+    )
 
 
 def test_absolute_pe_supports_explicit_positions():
@@ -94,10 +81,11 @@ def test_absolute_pe_supports_explicit_positions():
     torch.testing.assert_close(output, positional_embedding.weight[position_ids])
 
 
-def test_absolute_pe_is_not_registered_as_model_state():
+def test_absolute_pe_is_a_nonpersistent_model_buffer():
     model = build_transformer(AbsolutePE)
 
-    assert not isinstance(model.wpe, torch.nn.Module)
+    assert isinstance(model.wpe, torch.nn.Module)
+    assert "weight" in dict(model.wpe.named_buffers())
     assert "wpe.weight" not in model.state_dict()
 
 
