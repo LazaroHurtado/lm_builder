@@ -187,6 +187,23 @@ def test_generate_without_eos_uses_max_new_tokens():
     assert model.forward_calls == 3
 
 
+def test_generate_stops_after_secondary_eos_token_id():
+    model = build_scripted_language_model([[3], [4]])
+
+    generated = list(
+        model.generate(
+            torch.tensor([[1]]),
+            max_new_tokens=5,
+            temperature=0,
+            use_cache=False,
+            eos_token_id=[2, 3],
+        )
+    )
+
+    assert torch.equal(torch.cat(generated, dim=1), torch.tensor([[3]]))
+    assert model.forward_calls == 1
+
+
 def test_generate_repeats_eos_for_finished_batch_rows():
     model = build_scripted_language_model(
         [

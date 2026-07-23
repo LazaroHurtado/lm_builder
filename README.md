@@ -127,8 +127,9 @@ Models with absolute input positional embeddings reset the cache and recompute
 the current context window after overflow because cached states cannot be safely
 reindexed.
 
-Generation stops after every batch row emits `eos_token_id`, using the
-tokenizer's EOS ID by default; without one, `max_new_tokens` remains the limit.
+Generation stops after every batch row emits any `eos_token_id`; pass one ID or
+a list, tuple, or tensor, or use the tokenizer default. Without one,
+`max_new_tokens` remains the limit.
 
 ### Todo
 

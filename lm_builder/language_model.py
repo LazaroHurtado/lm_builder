@@ -66,6 +66,11 @@ class LanguageModel(Transformer):
         full_attention_mask = attention_mask
         if eos_token_id is None and self.tokenizer is not None:
             eos_token_id = self.tokenizer.eos_token_id
+        eos_token_ids = (
+            torch.as_tensor(eos_token_id, device=input_ids.device).flatten()
+            if eos_token_id is not None
+            else None
+        )
         finished = torch.zeros(
             input_ids.size(0),
             dtype=torch.bool,
@@ -111,13 +116,13 @@ class LanguageModel(Transformer):
             else:
                 next_id = torch.argmax(logits, dim=-1, keepdim=True)
 
-            if eos_token_id is not None:
+            if eos_token_ids is not None:
                 next_id = torch.where(
                     finished[:, None],
-                    torch.full_like(next_id, eos_token_id),
+                    eos_token_ids[0],
                     next_id,
                 )
-                finished |= next_id.squeeze(-1) == eos_token_id
+                finished |= (next_id == eos_token_ids).any(dim=-1)
 
             full_sequence = torch.cat((full_sequence, next_id), dim=1)
             if full_attention_mask is not None:
@@ -130,7 +135,7 @@ class LanguageModel(Transformer):
                 )
 
             yield next_id
-            if eos_token_id is not None and finished.all():
+            if eos_token_ids is not None and finished.all():
                 break
 
     def prompt(
