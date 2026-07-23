@@ -21,19 +21,18 @@ class Transformer(nn.Module):
             for attention_config in config.attention_config
         ]
 
-        transformer_modules = dict(
-            wte=config.token_embedding(config.vocab_size, self.embedding_dim),
-            blocks=nn.ModuleList(blocks),
-            dropout=nn.Dropout(config.dropout),
-            norm=config.norm.build(self.embedding_dim),
-        )
+        self.wte = config.token_embedding(config.vocab_size, self.embedding_dim)
+        self.wpe = None
+        self.blocks = nn.ModuleList(blocks)
+        self.dropout = nn.Dropout(config.dropout)
+        self.norm = config.norm.build(self.embedding_dim)
 
         if config.positional_embedding is not None:
-            transformer_modules["wpe"] = config.positional_embedding(
+            positional_embedding = config.positional_embedding(
                 self.context_length, self.embedding_dim, config.inv_freq
             )
+            self.wpe = positional_embedding
 
-        self.transformer = nn.ModuleDict(transformer_modules)
         self.lm_head = nn.Linear(
             self.embedding_dim, config.vocab_size, bias=config.bias
         )
@@ -47,12 +46,12 @@ class Transformer(nn.Module):
             self.register_load_state_dict_post_hook(self._tie_word_embeddings)
 
     def _tie_word_embeddings(self, *args, **kwargs):  # pylint: disable=unused-argument
-        self.lm_head.weight = self.transformer.wte.weight
+        self.lm_head.weight = self.wte.weight
 
     def _get_cached_sequence_length(self, kv_caches):
         if kv_caches is None:
             return 0
-        if len(kv_caches) != len(self.transformer.blocks):
+        if len(kv_caches) != len(self.blocks):
             raise ValueError("A KV cache is required for each transformer block.")
 
         cache_lengths = {cache.sequence_length for cache in kv_caches}
@@ -141,15 +140,14 @@ class Transformer(nn.Module):
         )
 
         # Token embedding layer
-        x = self.transformer.wte(x)  # (B, T, C)
-        if "wpe" in self.transformer:
-            # Positional embedding layer
-            x = self.transformer.wpe(x, position_ids=position_ids)  # (1, T, C)
+        x = self.wte(x)  # (B, T, C)
+        if self.wpe is not None:
+            x = self.wpe(x, position_ids=position_ids)
 
-        x = self.transformer.dropout(x)  # (B, T, C)
+        x = self.dropout(x)  # (B, T, C)
 
         routing_losses = []
-        for layer_index, block in enumerate(self.transformer.blocks):
+        for layer_index, block in enumerate(self.blocks):
             kv_cache = None if _kv_caches is None else _kv_caches[layer_index]
             x, routing_loss = block(
                 x,
@@ -159,7 +157,7 @@ class Transformer(nn.Module):
             )
             if routing_loss is not None:
                 routing_losses.append(routing_loss)
-        x = self.transformer.norm(x)
+        x = self.norm(x)
         # (B, T, C) -> (B, T, V)
         logits = self.lm_head(x)
 

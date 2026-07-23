@@ -1,14 +1,21 @@
 import torch
 
-from torch import nn
 
-
-class AbsolutePE(nn.Module):
+class AbsolutePE:
     # For absolute positional embedding, half of the embeddings comes from a
     # sin wave and the other half comes from a cos wave.
 
+    KEY_TO_INSTANCE = {}
+
+    def __new__(cls, context_length: int, embedding_dim: int, base: float):
+        key = (context_length, embedding_dim, base)
+        if key not in cls.KEY_TO_INSTANCE:
+            cls.KEY_TO_INSTANCE[key] = super().__new__(cls)
+        return cls.KEY_TO_INSTANCE[key]
+
     def __init__(self, context_length: int, embedding_dim: int, base: float):
-        super().__init__()
+        if getattr(self, "_initialized", False):
+            return
 
         if embedding_dim % 2 != 0:
             embedding_dim += 1
@@ -16,44 +23,35 @@ class AbsolutePE(nn.Module):
         self.embedding_dim = embedding_dim
         self.context_length = context_length
         self.base = base
+        self.weight = None
+        self._initialized = True
 
-        self._generate_positional_embeddings()
-
-    def _generate_positional_embeddings(self):
-        # In the Attention Is All You Need paper, the positional embedding table
-        # is generated using sine for even index positions and cosine for odd positions.
-
+    def _generate_positional_embeddings(self, device, dtype):
         # We step by 2 so we can generate the sin and cos, which each takes half the
         # total embedding dimension, waves separately and then stack them together.
-        power = (2 * torch.arange(0, self.embedding_dim, step=2)) / self.embedding_dim
-
-        # This is the scale used in the paper, 1/(10_000**(2i/d_model)) where i is the
-        # dimension of the embedding
-        # (C/2)
-        inv_freq = 1 / (self.base**power)
-
-        # The next step is to multiply the position by the scaling factor, pos/10_000**(2i/d_model)
-        # (T) X (C/2) -> (T, C/2)
-        pos = torch.arange(0, self.context_length)
-        angles = torch.outer(pos, inv_freq)
-
-        # This will give us absolute positional embedding for each position
-        # and dimension of the embedding as described in the paper.
-        # (T, C/2) -> (T*C/2)
-        sin = angles.sin().view(-1)
-        cos = angles.cos().view(-1)
-
-        # (2, T*C/2)
-        sinusoids = torch.stack((sin, cos))
-        # (T, C)
-        self.weight = nn.Parameter(
-            self.interleave(sinusoids, (self.context_length, self.embedding_dim))
+        power = (
+            2
+            * torch.arange(
+                0,
+                self.embedding_dim,
+                step=2,
+                device=device,
+                dtype=torch.float32,
+            )
+            / self.embedding_dim
         )
-
-    def _apply(self, fn):
-        if self.weight.device.type == "meta":
-            self._generate_positional_embeddings()
-        return super()._apply(fn)
+        inv_freq = 1 / (self.base**power)
+        pos = torch.arange(
+            self.context_length,
+            device=device,
+            dtype=torch.float32,
+        )
+        angles = torch.outer(pos, inv_freq)
+        sinusoids = torch.stack((angles.sin().view(-1), angles.cos().view(-1)))
+        self.weight = self.interleave(
+            sinusoids,
+            (self.context_length, self.embedding_dim),
+        ).to(dtype=dtype)
 
     def interleave(self, x: torch.Tensor, shape: torch.Size):
         # I will explain this through an example:
@@ -77,11 +75,22 @@ class AbsolutePE(nn.Module):
         # (2, T*C/2) -> (T*C/2, 2) -> (T*C) -> (T, C)
         return x.t().contiguous().view(*shape)
 
-    def forward(self, x: torch.Tensor, position_ids=None):
+    def __call__(self, x: torch.Tensor, position_ids=None):
+        assert x.device.type != "meta", "AbsolutePE does not support meta tensors."
+        if position_ids is not None:
+            assert (
+                position_ids.device.type != "meta"
+            ), "AbsolutePE does not support meta tensors."
+
         _, T, C = x.size()
+        if self.weight is None:
+            self._generate_positional_embeddings(device=x.device, dtype=x.dtype)
+
+        weight = self.weight.to(device=x.device, dtype=x.dtype)
         if position_ids is None:
-            positional_embedding = self.weight[None, :T, :C]
+            positional_embedding = weight[None, :T, :C]
         else:
-            positional_embedding = self.weight[position_ids, :C]
+            position_ids = position_ids.to(device=x.device, dtype=torch.long)
+            positional_embedding = weight[position_ids, :C]
 
         return x + positional_embedding

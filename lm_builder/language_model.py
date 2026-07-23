@@ -83,9 +83,7 @@ class LanguageModel(Transformer):
                 self.context_length,
                 input_ids.size(1) + max_new_tokens,
             )
-            kv_caches = [
-                KVCache(capacity=cache_capacity) for _ in self.transformer.blocks
-            ]
+            kv_caches = [KVCache(capacity=cache_capacity) for _ in self.blocks]
 
         for _ in range(max_new_tokens):
             model_input, model_attention_mask = self._prepare_generation_inputs(

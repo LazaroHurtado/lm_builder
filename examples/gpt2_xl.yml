@@ -19,7 +19,7 @@ ffn_config:
   norm:
     type: LayerNorm
     bias: true
-positional_embedding: AbsolutePE
+positional_embedding: LearnablePE
 norm:
   type: LayerNorm
   bias: true

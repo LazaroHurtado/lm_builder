@@ -68,6 +68,7 @@ class GPT2Loader:
             ("ln_f.", "norm."),
             ("attn.c_attn", "attn.qkv_proj"),
             ("attn.c_proj", "attn.out_proj"),
+            ("transformer.", ""),
         ]
         # GPT2 used convolutions instead of linear modules so these weights won't match
         # our linear layer weights, instead we have to transpose them.

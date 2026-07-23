@@ -96,7 +96,7 @@ def test_cached_decode_matches_full_forward(
         position_type=position_type,
         qk_norm={"type": "RMSNorm"} if with_qk_norm else None,
     )
-    for block in model.transformer.blocks:
+    for block in model.blocks:
         block.attn.has_flash_attn = use_scaled_dot_product_attention and hasattr(
             F, "scaled_dot_product_attention"
         )
@@ -105,9 +105,7 @@ def test_cached_decode_matches_full_forward(
     attention_mask = (
         torch.tensor([[0, 1, 1, 1], [1, 1, 1, 1]]) if with_attention_mask else None
     )
-    kv_caches = [
-        KVCache(capacity=model.context_length) for _ in model.transformer.blocks
-    ]
+    kv_caches = [KVCache(capacity=model.context_length) for _ in model.blocks]
 
     with torch.inference_mode():
         full_logits, _, _ = model(input_ids, attention_mask=attention_mask)
@@ -136,7 +134,7 @@ def test_generate_prefills_once_then_decodes_single_tokens():
     torch.manual_seed(11)
     model = build_model(context_length=8)
     projected_sequence_lengths = []
-    hook = model.transformer.blocks[0].attn.qkv_proj.register_forward_pre_hook(
+    hook = model.blocks[0].attn.qkv_proj.register_forward_pre_hook(
         lambda _, inputs: projected_sequence_lengths.append(inputs[0].size(1))
     )
 
@@ -196,7 +194,7 @@ def test_generate_sizes_kv_cache_to_sequence_budget(
         )
     )
 
-    assert len(created_caches) == len(model.transformer.blocks)
+    assert len(created_caches) == len(model.blocks)
     assert all(cache.capacity == expected_capacity for cache in created_caches)
     assert all(cache.k.size(2) == expected_capacity for cache in created_caches)
     assert all(cache.v.size(2) == expected_capacity for cache in created_caches)
@@ -220,7 +218,7 @@ def test_absolute_position_cache_recomputes_across_context_overflow(attention_ty
     input_ids = torch.tensor([[0, 2, 3], [4, 5, 6]])
     attention_mask = torch.tensor([[0, 1, 1], [1, 1, 1]])
     projected_sequence_lengths = []
-    hook = model.transformer.blocks[0].attn.qkv_proj.register_forward_pre_hook(
+    hook = model.blocks[0].attn.qkv_proj.register_forward_pre_hook(
         lambda _, inputs: projected_sequence_lengths.append(inputs[0].size(1))
     )
 
@@ -275,7 +273,7 @@ def test_rolling_cache_keeps_single_token_decoding_after_overflow(
         context_length=4,
     )
     projected_sequence_lengths = []
-    hook = model.transformer.blocks[0].attn.qkv_proj.register_forward_pre_hook(
+    hook = model.blocks[0].attn.qkv_proj.register_forward_pre_hook(
         lambda _, inputs: projected_sequence_lengths.append(inputs[0].size(1))
     )
 
@@ -354,7 +352,7 @@ def test_rolling_cache_handles_context_length_one():
         context_length=1,
     )
     projected_sequence_lengths = []
-    hook = model.transformer.blocks[0].attn.qkv_proj.register_forward_pre_hook(
+    hook = model.blocks[0].attn.qkv_proj.register_forward_pre_hook(
         lambda _, inputs: projected_sequence_lengths.append(inputs[0].size(1))
     )
 
@@ -404,7 +402,7 @@ def test_rolling_cache_supports_mixed_attention_layers():
                 layer_index
             ].append(inputs[0].size(1))
         )
-        for layer_index, block in enumerate(model.transformer.blocks)
+        for layer_index, block in enumerate(model.blocks)
     ]
 
     try:
@@ -429,7 +427,7 @@ def test_generation_uses_fresh_cache_for_each_call():
     torch.manual_seed(17)
     model = build_model(context_length=8)
     projected_sequence_lengths = []
-    hook = model.transformer.blocks[0].attn.qkv_proj.register_forward_pre_hook(
+    hook = model.blocks[0].attn.qkv_proj.register_forward_pre_hook(
         lambda _, inputs: projected_sequence_lengths.append(inputs[0].size(1))
     )
 
@@ -450,9 +448,7 @@ def test_generation_uses_fresh_cache_for_each_call():
 
 def test_grouped_query_cache_keeps_native_kv_heads():
     model = build_model(attention_type=GroupedQueryAttention)
-    kv_caches = [
-        KVCache(capacity=model.context_length) for _ in model.transformer.blocks
-    ]
+    kv_caches = [KVCache(capacity=model.context_length) for _ in model.blocks]
 
     with torch.inference_mode():
         model(

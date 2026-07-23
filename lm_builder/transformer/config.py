@@ -21,7 +21,7 @@ class TransformerConfig:
         default_factory=normalizers.NormalizerConfig
     )
     token_embedding: Type[nn.Module] = nn.Embedding
-    positional_embedding: Optional[Type[nn.Module]] = None
+    positional_embedding: Optional[Type] = None
     inv_freq: float = 10_000.0
     bias: bool = False
     dropout: float = 0.0

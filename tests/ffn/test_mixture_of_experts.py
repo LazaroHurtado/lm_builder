@@ -369,7 +369,7 @@ def test_transformer_returns_top_one_routing_loss():
     total_loss = cross_entropy_loss + 0.01 * routing_loss
     total_loss.backward()
 
-    moe = model.transformer.blocks[0].ffn
+    moe = model.blocks[0].ffn
     assert logits.shape == (2, 3, 16)
     assert isinstance(moe, MixtureOfExperts)
     assert cross_entropy_loss_without_targets is None

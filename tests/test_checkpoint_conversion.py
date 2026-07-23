@@ -19,15 +19,15 @@ def test_gpt2_checkpoint_keeps_fused_qkv_projection():
     state_dict = GPT2Loader.convert_state_dict(original_state_dict)
 
     assert list(state_dict) == [
-        "transformer.blocks.0.attn.qkv_proj.weight",
-        "transformer.blocks.0.attn.qkv_proj.bias",
+        "blocks.0.attn.qkv_proj.weight",
+        "blocks.0.attn.qkv_proj.bias",
     ]
     assert torch.equal(
-        state_dict["transformer.blocks.0.attn.qkv_proj.weight"],
+        state_dict["blocks.0.attn.qkv_proj.weight"],
         qkv_weight.t(),
     )
     assert torch.equal(
-        state_dict["transformer.blocks.0.attn.qkv_proj.bias"],
+        state_dict["blocks.0.attn.qkv_proj.bias"],
         qkv_bias,
     )
 
@@ -55,15 +55,15 @@ def test_llama_checkpoint_combines_qkv_projections():
     state_dict = Llama2Loader().convert_state_dict(original_state_dict)
 
     assert torch.equal(
-        state_dict["transformer.blocks.0.attn.qkv_proj.weight"],
+        state_dict["blocks.0.attn.qkv_proj.weight"],
         torch.cat((query_weight, key_weight, value_weight)),
     )
     assert torch.equal(
-        state_dict["transformer.blocks.0.attn.qkv_proj.bias"],
+        state_dict["blocks.0.attn.qkv_proj.bias"],
         torch.cat((query_bias, key_bias, value_bias)),
     )
     assert torch.equal(
-        state_dict["transformer.blocks.0.attn.out_proj.weight"],
+        state_dict["blocks.0.attn.out_proj.weight"],
         output_weight,
     )
     assert all(

@@ -125,7 +125,7 @@ def test_transformer_builds_self_contained_branch_configs():
     )
 
     model = Transformer(config)
-    block = model.transformer.blocks[0]
+    block = model.blocks[0]
 
     assert isinstance(block.attn, CausalMultiHeadAttention)
     assert isinstance(block.ffn, FeedForward)
@@ -136,15 +136,15 @@ def test_transformer_builds_self_contained_branch_configs():
     assert block.attn_norm.eps == 1e-4
     assert isinstance(block.ffn_norm, RMSNorm)
     assert block.ffn_norm.eps == 2e-5
-    assert isinstance(model.transformer.norm, torch.nn.LayerNorm)
-    assert model.transformer.norm.eps == 3e-5
+    assert isinstance(model.norm, torch.nn.LayerNorm)
+    assert model.norm.eps == 3e-5
     assert config.tie_word_embeddings
-    assert model.lm_head.weight is model.transformer.wte.weight
+    assert model.lm_head.weight is model.wte.weight
 
 
 def test_tied_word_embeddings_share_parameters_gradients_and_state():
     model = build_transformer(tie_word_embeddings=True)
-    shared_weight = model.transformer.wte.weight
+    shared_weight = model.wte.weight
     _, loss, _ = model(
         torch.tensor([[1, 2, 3]]),
         targets=torch.tensor([[2, 3, 4]]),
@@ -158,8 +158,7 @@ def test_tied_word_embeddings_share_parameters_gradients_and_state():
     assert shared_weight.grad.abs().sum() > 0
     assert sum(parameter is shared_weight for parameter in model.parameters()) == 1
     assert (
-        state_dict["transformer.wte.weight"].data_ptr()
-        == state_dict["lm_head.weight"].data_ptr()
+        state_dict["wte.weight"].data_ptr() == state_dict["lm_head.weight"].data_ptr()
     )
 
 
@@ -167,22 +166,22 @@ def test_word_embeddings_are_untied_by_default():
     model = build_transformer()
 
     assert not model.config.tie_word_embeddings
-    assert model.lm_head.weight is not model.transformer.wte.weight
-    assert model.lm_head.weight.data_ptr() != model.transformer.wte.weight.data_ptr()
+    assert model.lm_head.weight is not model.wte.weight
+    assert model.lm_head.weight.data_ptr() != model.wte.weight.data_ptr()
 
 
 def test_tied_word_embeddings_remain_tied_after_assigned_state_load():
     source = build_transformer(tie_word_embeddings=True)
     with torch.no_grad():
-        source.transformer.wte.weight.fill_(2.5)
+        source.wte.weight.fill_(2.5)
 
     model = build_transformer(tie_word_embeddings=True).to("meta")
     model.load_state_dict(source.state_dict(), assign=True)
 
-    assert model.lm_head.weight is model.transformer.wte.weight
+    assert model.lm_head.weight is model.wte.weight
     assert torch.equal(
-        model.transformer.wte.weight,
-        torch.full_like(model.transformer.wte.weight, 2.5),
+        model.wte.weight,
+        torch.full_like(model.wte.weight, 2.5),
     )
 
 
@@ -285,8 +284,8 @@ def test_left_padding_does_not_change_content_logits(
             positional_embedding=AbsolutePE if position_type == "absolute" else None,
         )
     ).eval()
-    model.transformer.blocks[0].attn.has_flash_attn = (
-        use_scaled_dot_product_attention and hasattr(F, "scaled_dot_product_attention")
+    model.blocks[0].attn.has_flash_attn = use_scaled_dot_product_attention and hasattr(
+        F, "scaled_dot_product_attention"
     )
     input_ids = torch.tensor([[2, 3]])
     attention_mask = torch.tensor([[1, 1]])

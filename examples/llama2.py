@@ -51,7 +51,6 @@ class Llama2Loader:
 
     def convert_state_dict(self, original_state_dict):
         name_changes = [
-            ("model.", "transformer."),
             (".mlp.", ".ffn."),
             (".layers.", ".blocks."),
             ("input_layernorm", "attn_norm"),
@@ -60,6 +59,7 @@ class Llama2Loader:
             ("self_attn", "attn"),
             ("post_attention_layernorm", "ffn_norm"),
             (".embed_tokens.weight", ".wte.weight"),
+            ("model.", ""),
         ]
 
         state_dict = change_state_dict_names(original_state_dict, name_changes)
