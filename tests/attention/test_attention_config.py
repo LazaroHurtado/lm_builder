@@ -380,3 +380,26 @@ num_layers: 3
         GroupedQueryAttention,
         CausalMultiHeadAttention,
     ]
+
+
+def test_from_yml_clones_explicit_head_dimension_per_layer(tmp_path):
+    config_path = tmp_path / "model.yml"
+    config_path.write_text(
+        """
+context_length: 8
+embedding_dimension: 16
+attention_config:
+  num_heads: 4
+  layers:
+    - type: GroupedQueryAttention
+      kv_heads: 2
+      head_dim: 6
+num_layers: 2
+""",
+        encoding="utf-8",
+    )
+
+    configs = AttentionConfig.from_yml(config_path)
+
+    assert [config.head_dim for config in configs] == [6, 6]
+    assert configs[0] is not configs[1]

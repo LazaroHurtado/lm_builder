@@ -23,30 +23,31 @@ class MultiHeadAttention(Attention):
         ):
             raise ValueError(f"{type(self).__name__} does not support window_size.")
 
-        assert config.embedding_dimension % config.num_heads == 0
-
         self.context_len = config.context_length
         self.embedding_dim = config.embedding_dimension
         self.num_heads = config.num_heads
         self.window_size = config.window_size
 
-        self.head_dim = self.embedding_dim // self.num_heads
+        if config.head_dim is None:
+            assert config.embedding_dimension % config.num_heads == 0
+            self.head_dim = self.embedding_dim // self.num_heads
+        else:
+            self.head_dim = config.head_dim
+
         self.kv_heads = self._get_num_kv_heads(config)
         assert (
             self.num_heads % self.kv_heads == 0
         ), "Number of query heads must be divisible by the number of key/value heads."
         self.shared_heads = self.num_heads // self.kv_heads
 
-        self.q_dim = self.embedding_dim
+        self.q_dim = self.num_heads * self.head_dim
         self.kv_dim = self.kv_heads * self.head_dim
         self.qkv_proj = nn.Linear(
             self.embedding_dim,
             self.q_dim + (2 * self.kv_dim),
             bias=config.bias,
         )
-        self.out_proj = nn.Linear(
-            self.embedding_dim, self.embedding_dim, bias=config.bias
-        )
+        self.out_proj = nn.Linear(self.q_dim, self.embedding_dim, bias=config.bias)
 
         self.has_qk_norm = config.qk_norm is not None
         if self.has_qk_norm:
@@ -213,7 +214,7 @@ class MultiHeadAttention(Attention):
             assert self.supports_kv_cache, "KV caching requires causal attention."
 
         # batch size, sequence length, embedding dimensionality.
-        B, T, C = x.size()
+        B, T, _ = x.size()
 
         # Project Q, K, and V together, then split their output dimensions.
         q, k, v = self.get_qkv(x)
@@ -257,8 +258,8 @@ class MultiHeadAttention(Attention):
 
         # Convert multi-headed shaped matrix back to original shape
         # (B, num_heads, T, head_dim) -> (B, T, num_heads, head_dim)
-        # -> (B*T*num_heads*head_dim) -> (B, T, C)
-        attn = attn.transpose(1, 2).contiguous().view(B, T, C)
+        # -> (B*T*num_heads*head_dim) -> (B, T, q_dim)
+        attn = attn.transpose(1, 2).contiguous().view(B, T, self.q_dim)
 
         out = self.out_proj(attn)
         out = self.resid_dropout(out)

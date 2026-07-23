@@ -118,6 +118,65 @@ def test_attention_uses_one_equivalent_qkv_projection(
     torch.testing.assert_close(value, value_projection(inputs), rtol=1e-5, atol=1e-6)
 
 
+def test_attention_infers_head_dimension_from_embedding_dimension():
+    attention = CausalMultiHeadAttention(
+        AttentionConfig(
+            context_length=4,
+            embedding_dimension=8,
+            num_heads=4,
+            attention_type=CausalMultiHeadAttention,
+        )
+    )
+
+    assert attention.head_dim == 2
+    assert attention.q_dim == 8
+    assert attention.kv_dim == 8
+    assert attention.qkv_proj.out_features == 24
+    assert attention.out_proj.in_features == 8
+    assert attention.out_proj.out_features == 8
+    assert attention(torch.randn(2, 4, 8)).shape == (2, 4, 8)
+
+
+def test_inferred_head_dimension_requires_divisible_embedding_dimension():
+    with pytest.raises(AssertionError):
+        CausalMultiHeadAttention(
+            AttentionConfig(
+                context_length=4,
+                embedding_dimension=10,
+                num_heads=4,
+                attention_type=CausalMultiHeadAttention,
+            )
+        )
+
+
+def test_explicit_head_dimension_sizes_fused_and_output_projections():
+    attention = GroupedQueryAttention(
+        AttentionConfig(
+            context_length=4,
+            embedding_dimension=8,
+            num_heads=4,
+            head_dim=3,
+            attention_type=GroupedQueryAttention,
+            kv_heads=2,
+        )
+    )
+    inputs = torch.randn(2, 4, 8)
+
+    query, key, value = attention.get_qkv(inputs)
+
+    assert attention.head_dim == 3
+    assert attention.q_dim == 12
+    assert attention.kv_dim == 6
+    assert attention.qkv_proj.in_features == 8
+    assert attention.qkv_proj.out_features == 24
+    assert query.shape == (2, 4, 12)
+    assert key.shape == (2, 4, 6)
+    assert value.shape == (2, 4, 6)
+    assert attention.out_proj.in_features == 12
+    assert attention.out_proj.out_features == 8
+    assert attention(inputs).shape == (2, 4, 8)
+
+
 @pytest.mark.parametrize(
     ("attention_type", "kv_heads"),
     [

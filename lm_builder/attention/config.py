@@ -77,6 +77,7 @@ class AttentionConfig:
     inv_freq: float = 10_000.0
     norm: NormalizerConfig = field(default_factory=NormalizerConfig)
     qk_norm: Optional[NormalizerConfig] = None
+    head_dim: Optional[int] = None
 
     def __post_init__(self):
         if self.attention_type is None:
