@@ -4,6 +4,7 @@ import torch
 
 from examples.gpt2 import GPT2Loader
 from examples.llama2 import Llama2Loader
+from examples.qwen3 import Qwen3Loader
 
 
 def test_gpt2_checkpoint_keeps_fused_qkv_projection():
@@ -70,4 +71,36 @@ def test_llama_checkpoint_combines_qkv_projections():
         projection_name not in layer_name
         for layer_name in state_dict
         for projection_name in (".q_proj.", ".k_proj.", ".v_proj.")
+    )
+
+
+def test_qwen_checkpoint_combines_qkv_and_keeps_qk_norms():
+    query_weight = torch.full((16, 8), 1.0)
+    key_weight = torch.full((8, 8), 2.0)
+    value_weight = torch.full((8, 8), 3.0)
+    query_norm_weight = torch.full((8,), 4.0)
+    key_norm_weight = torch.full((8,), 5.0)
+    original_state_dict = OrderedDict(
+        {
+            "model.layers.0.self_attn.q_proj.weight": query_weight,
+            "model.layers.0.self_attn.k_proj.weight": key_weight,
+            "model.layers.0.self_attn.v_proj.weight": value_weight,
+            "model.layers.0.self_attn.q_norm.weight": query_norm_weight,
+            "model.layers.0.self_attn.k_norm.weight": key_norm_weight,
+        }
+    )
+
+    state_dict = Qwen3Loader().convert_state_dict(original_state_dict)
+
+    assert torch.equal(
+        state_dict["blocks.0.attn.qkv_proj.weight"],
+        torch.cat((query_weight, key_weight, value_weight)),
+    )
+    assert torch.equal(
+        state_dict["blocks.0.attn.q_norm.weight"],
+        query_norm_weight,
+    )
+    assert torch.equal(
+        state_dict["blocks.0.attn.k_norm.weight"],
+        key_norm_weight,
     )

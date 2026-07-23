@@ -1,0 +1,35 @@
+attention_config:
+  positional_embedding: RotaryPE
+  inv_freq: 1000000.0
+  num_heads: 16
+  head_dim: 128
+  bias: false
+  norm:
+    type: RMSNorm
+    eps: 1.0e-6
+  qk_norm:
+    type: RMSNorm
+    eps: 1.0e-6
+  layers:
+    - type: GroupedQueryAttention
+      kv_heads: 8
+
+ffn_config:
+  type: FeedForward
+  intermediate_dimension: 3072
+  activation_fn: SiLU
+  bias: false
+  norm:
+    type: RMSNorm
+    eps: 1.0e-6
+
+context_length: 40960
+embedding_dimension: 1024
+bias: false
+dropout: 0.0
+tie_word_embeddings: true
+vocab_size: 151936
+num_layers: 28
+norm:
+  type: RMSNorm
+  eps: 1.0e-6

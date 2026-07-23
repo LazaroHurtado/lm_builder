@@ -232,6 +232,7 @@ def test_transformer_requires_one_attention_config_per_layer():
     [
         ("examples/gpt2_xl.yml", 48, True),
         ("examples/llama2_7b_chat.yml", 32, False),
+        ("examples/qwen3_0_6b.yml", 28, True),
         ("examples/tinystories_200m.yml", 17, False),
     ],
 )

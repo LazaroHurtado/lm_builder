@@ -2,14 +2,12 @@ import gc
 import os
 
 import torch
-from dotenv import load_dotenv
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
 from lm_builder import LanguageModel
 from lm_builder.transformer import TransformerConfig
 from lm_builder.utils import change_state_dict_names, combine_qkv_projections
 
-load_dotenv()
 
 def get_device():
     if torch.cuda.is_available():
@@ -19,15 +17,16 @@ def get_device():
     return torch.device("cpu")
 
 
-class Llama2Loader:
-    MODEL_ARCH_FILE = "examples/llama2_7b_chat.yml"
-    HF_MODEL_NAME = "meta-llama/Llama-2-7b-chat-hf"
-    WEIGHTS_FILE = "llama2_weights.pth"
+class Qwen3Loader:
+    MODEL_ARCH_FILE = "examples/qwen3_0_6b.yml"
+    HF_MODEL_NAME = "Qwen/Qwen3-0.6B"
+    WEIGHTS_FILE = "qwen3_0_6b_weights.pth"
 
     def build_state_dict(self):
-        # Load llama2-7b-chat model from huggingface to get the state dict
         model_hf = AutoModelForCausalLM.from_pretrained(
-            self.HF_MODEL_NAME, device_map="cpu"
+            self.HF_MODEL_NAME,
+            device_map="cpu",
+            torch_dtype="auto",
         )
         state_dict = model_hf.state_dict()
 
@@ -44,10 +43,10 @@ class Llama2Loader:
         tokenizer = AutoTokenizer.from_pretrained(self.HF_MODEL_NAME)
 
         with torch.no_grad():
-            llama2_7b = LanguageModel(transformer_config, tokenizer)
-            llama2_7b.to(rank)
-            llama2_7b.eval()
-        return llama2_7b
+            qwen3 = LanguageModel(transformer_config, tokenizer)
+            qwen3.to(rank)
+            qwen3.eval()
+        return qwen3
 
     def convert_state_dict(self, original_state_dict):
         name_changes = [
@@ -67,14 +66,15 @@ class Llama2Loader:
 
 
 def main():
-    if not os.path.exists("llama2_weights.pth"):
-        print("Building Llama2 state dict...")
-        Llama2Loader().build_state_dict()
+    loader = Qwen3Loader()
+    if not os.path.exists(loader.WEIGHTS_FILE):
+        print("Building Qwen3 state dict...")
+        loader.build_state_dict()
 
     with torch.no_grad():
-        llama2_7b = Llama2Loader().build_model("meta")
-        state_dict = torch.load(Llama2Loader.WEIGHTS_FILE, map_location="cpu")
-        llama2_7b.load_state_dict(state_dict, assign=True)
+        qwen3 = loader.build_model("meta")
+        state_dict = torch.load(loader.WEIGHTS_FILE, map_location="cpu")
+        qwen3.load_state_dict(state_dict, assign=True)
 
         del state_dict
         gc.collect()
@@ -82,16 +82,19 @@ def main():
         messages = [
             {"role": "user", "content": "Who is Claude Shannon?"},
         ]
+        generation_config = GenerationConfig.from_pretrained(loader.HF_MODEL_NAME)
 
-        llama2_7b.to(DEVICE)
-        llama2_7b.prompt(
+        qwen3.to(get_device())
+        qwen3.prompt(
             messages,
-            max_new_tokens=100,
-            temperature=0,
+            max_new_tokens=4096,
+            temperature=generation_config.temperature,
+            top_k=generation_config.top_k,
+            eos_token_id=generation_config.eos_token_id,
             apply_chat_template=True,
             stream=True,
             debug=True,
-            device=DEVICE,
+            device=get_device(),
             use_cache=True,
         )
 
