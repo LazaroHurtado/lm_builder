@@ -1,8 +1,9 @@
 from types import SimpleNamespace
 
 import torch
+from torch import nn
 
-from lm_builder import LanguageModel
+from lm_builder import TextGenerationPipeline
 from lm_builder.attention import (
     AttentionConfig,
     CausalMultiHeadAttention,
@@ -31,9 +32,34 @@ class FakeTokenizer:
         return ["decoded"] * output_ids.size(0)
 
 
-class RecordingLanguageModel(LanguageModel):
-    def __init__(self, config, tokenizer):
-        super().__init__(config, tokenizer)
+def build_config(context_length=8):
+    return TransformerConfig(
+        embedding_dimension=8,
+        context_length=context_length,
+        attention_config=[
+            AttentionConfig(
+                context_length=context_length,
+                embedding_dimension=8,
+                num_heads=2,
+                attention_type=CausalMultiHeadAttention,
+            )
+        ],
+        ffn_config=FeedForwardConfig(
+            embedding_dimension=8,
+            intermediate_dimension=16,
+            ffn_type=FeedForward,
+        ),
+        vocab_size=10,
+        num_layers=1,
+    )
+
+
+class RecordingModel(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.context_length = config.context_length
+        self.blocks = nn.ModuleList()
         self.attention_masks = []
 
     def forward(
@@ -54,9 +80,12 @@ class RecordingLanguageModel(LanguageModel):
         return logits, None, None
 
 
-class ScriptedLanguageModel(LanguageModel):
-    def __init__(self, config, tokenizer, generated_token_ids):
-        super().__init__(config, tokenizer)
+class ScriptedModel(nn.Module):
+    def __init__(self, config, generated_token_ids):
+        super().__init__()
+        self.config = config
+        self.context_length = config.context_length
+        self.blocks = nn.ModuleList()
         self.generated_token_ids = generated_token_ids
         self.forward_calls = 0
 
@@ -83,58 +112,28 @@ class ScriptedLanguageModel(LanguageModel):
         return logits, None, None
 
 
-def build_scripted_language_model(generated_token_ids, tokenizer=None):
-    return ScriptedLanguageModel(
-        TransformerConfig(
-            embedding_dimension=8,
-            context_length=8,
-            attention_config=[
-                AttentionConfig(
-                    context_length=8,
-                    embedding_dimension=8,
-                    num_heads=2,
-                    attention_type=CausalMultiHeadAttention,
-                )
-            ],
-            ffn_config=FeedForwardConfig(
-                embedding_dimension=8,
-                intermediate_dimension=16,
-                ffn_type=FeedForward,
-            ),
-            vocab_size=10,
-            num_layers=1,
-        ),
-        tokenizer,
+def build_scripted_pipeline(generated_token_ids, tokenizer=None):
+    model = ScriptedModel(
+        build_config(),
         generated_token_ids,
     ).eval()
+    return TextGenerationPipeline(model, tokenizer)
+
+
+def test_pipeline_owns_model_without_being_module():
+    model = ScriptedModel(build_config(), [[1]]).eval()
+    pipeline = TextGenerationPipeline(model, tokenizer=None)
+
+    assert pipeline.model is model
+    assert not isinstance(pipeline, nn.Module)
 
 
 def test_prompt_passes_and_extends_tokenizer_attention_mask():
     tokenizer = FakeTokenizer()
-    model = RecordingLanguageModel(
-        TransformerConfig(
-            embedding_dimension=8,
-            context_length=3,
-            attention_config=[
-                AttentionConfig(
-                    context_length=3,
-                    embedding_dimension=8,
-                    num_heads=2,
-                    attention_type=CausalMultiHeadAttention,
-                )
-            ],
-            ffn_config=FeedForwardConfig(
-                embedding_dimension=8,
-                intermediate_dimension=16,
-                ffn_type=FeedForward,
-            ),
-            vocab_size=10,
-            num_layers=1,
-        ),
-        tokenizer,
-    )
+    model = RecordingModel(build_config(context_length=3)).eval()
+    pipeline = TextGenerationPipeline(model, tokenizer)
 
-    outputs = model.prompt(
+    outputs = pipeline.prompt(
         ["short", "longer"],
         max_new_tokens=2,
         temperature=0,
@@ -156,10 +155,10 @@ def test_prompt_passes_and_extends_tokenizer_attention_mask():
 
 def test_generate_stops_after_tokenizer_eos():
     tokenizer = SimpleNamespace(eos_token_id=2)
-    model = build_scripted_language_model([[2], [4]], tokenizer)
+    pipeline = build_scripted_pipeline([[2], [4]], tokenizer)
 
     generated = list(
-        model.generate(
+        pipeline.generate(
             torch.tensor([[1]]),
             max_new_tokens=5,
             temperature=0,
@@ -168,14 +167,14 @@ def test_generate_stops_after_tokenizer_eos():
     )
 
     assert torch.equal(torch.cat(generated, dim=1), torch.tensor([[2]]))
-    assert model.forward_calls == 1
+    assert pipeline.model.forward_calls == 1
 
 
 def test_generate_without_eos_uses_max_new_tokens():
-    model = build_scripted_language_model([[3], [4], [5]])
+    pipeline = build_scripted_pipeline([[3], [4], [5]])
 
     generated = list(
-        model.generate(
+        pipeline.generate(
             torch.tensor([[1]]),
             max_new_tokens=3,
             temperature=0,
@@ -184,14 +183,14 @@ def test_generate_without_eos_uses_max_new_tokens():
     )
 
     assert torch.equal(torch.cat(generated, dim=1), torch.tensor([[3, 4, 5]]))
-    assert model.forward_calls == 3
+    assert pipeline.model.forward_calls == 3
 
 
 def test_generate_stops_after_secondary_eos_token_id():
-    model = build_scripted_language_model([[3], [4]])
+    pipeline = build_scripted_pipeline([[3], [4]])
 
     generated = list(
-        model.generate(
+        pipeline.generate(
             torch.tensor([[1]]),
             max_new_tokens=5,
             temperature=0,
@@ -201,11 +200,11 @@ def test_generate_stops_after_secondary_eos_token_id():
     )
 
     assert torch.equal(torch.cat(generated, dim=1), torch.tensor([[3]]))
-    assert model.forward_calls == 1
+    assert pipeline.model.forward_calls == 1
 
 
 def test_generate_repeats_eos_for_finished_batch_rows():
-    model = build_scripted_language_model(
+    pipeline = build_scripted_pipeline(
         [
             [2, 4],
             [7, 5],
@@ -216,7 +215,7 @@ def test_generate_repeats_eos_for_finished_batch_rows():
 
     generated = torch.cat(
         list(
-            model.generate(
+            pipeline.generate(
                 torch.tensor([[1, 1], [1, 1]]),
                 max_new_tokens=5,
                 temperature=0,
@@ -236,4 +235,4 @@ def test_generate_repeats_eos_for_finished_batch_rows():
             ]
         ),
     )
-    assert model.forward_calls == 3
+    assert pipeline.model.forward_calls == 3

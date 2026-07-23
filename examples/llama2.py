@@ -5,8 +5,8 @@ import torch
 from dotenv import load_dotenv
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from lm_builder import LanguageModel
-from lm_builder.transformer import TransformerConfig
+from lm_builder import TextGenerationPipeline
+from lm_builder.transformer import Transformer, TransformerConfig
 from lm_builder.utils import change_state_dict_names, combine_qkv_projections
 
 load_dotenv()
@@ -42,10 +42,9 @@ class Llama2Loader:
 
     def build_model(self, rank):
         transformer_config = TransformerConfig.from_yml(self.MODEL_ARCH_FILE)
-        tokenizer = AutoTokenizer.from_pretrained(self.HF_MODEL_NAME)
 
         with torch.no_grad():
-            llama2_7b = LanguageModel(transformer_config, tokenizer)
+            llama2_7b = Transformer(transformer_config)
             llama2_7b.to(rank)
             llama2_7b.eval()
         return llama2_7b
@@ -85,7 +84,9 @@ def main():
         ]
 
         llama2_7b.to(DEVICE)
-        llama2_7b.prompt(
+        tokenizer = AutoTokenizer.from_pretrained(Llama2Loader.HF_MODEL_NAME)
+        pipeline = TextGenerationPipeline(llama2_7b, tokenizer)
+        pipeline.prompt(
             messages,
             max_new_tokens=100,
             temperature=0,

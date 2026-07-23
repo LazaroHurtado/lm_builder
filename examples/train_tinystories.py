@@ -9,8 +9,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm, trange
 from transformers import AutoTokenizer
 
-from lm_builder import LanguageModel
-from lm_builder.transformer import TransformerConfig
+from lm_builder.transformer import Transformer, TransformerConfig
 
 DATASET_NAME = "roneneldan/TinyStories"
 TOKENIZER_NAME = "openai-community/gpt2"
@@ -54,7 +53,7 @@ def build_model(tokenizer):
             f"but {TOKENIZER_NAME} has {len(tokenizer)} tokens."
         )
 
-    model = LanguageModel(config, tokenizer)
+    model = Transformer(config)
     model.apply(initialize_weights)
 
     residual_std = 0.02 / math.sqrt(2 * config.num_layers)
@@ -102,6 +101,7 @@ def build_dataloader(stories, tokenizer, context_length, epoch, pin_memory):
 
 def train_epoch(
     model,
+    tokenizer,
     stories,
     optimizer,
     scaler,
@@ -115,7 +115,7 @@ def train_epoch(
     batch_progress = tqdm(
         build_dataloader(
             stories,
-            model.tokenizer,
+            tokenizer,
             model.context_length,
             epoch,
             pin_memory=device.type == "cuda",
@@ -194,7 +194,7 @@ def train_epoch(
     return average_loss
 
 
-def train(model, stories, device):
+def train(model, tokenizer, stories, device):
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=LEARNING_RATE,
@@ -211,6 +211,7 @@ def train(model, stories, device):
     for epoch in epoch_progress:
         average_loss = train_epoch(
             model,
+            tokenizer,
             stories,
             optimizer,
             scaler,
@@ -240,7 +241,7 @@ def main():
         f"effective batch size: {BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS}."
     )
 
-    train(model, stories, device)
+    train(model, tokenizer, stories, device)
     torch.save(model.state_dict(), CHECKPOINT_PATH)
     print(f"Saved weights to {CHECKPOINT_PATH}.")
 

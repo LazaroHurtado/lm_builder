@@ -1,1 +1,1 @@
-from .language_model import LanguageModel
+from .text_generation_pipeline import TextGenerationPipeline

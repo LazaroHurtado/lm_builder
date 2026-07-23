@@ -4,12 +4,12 @@ import torch
 import torch.nn.functional as F
 
 from .inference import KVCache
-from .transformer import Transformer, TransformerConfig
+from .transformer import Transformer
 
 
-class LanguageModel(Transformer):
-    def __init__(self, config: TransformerConfig, tokenizer):
-        super().__init__(config)
+class TextGenerationPipeline:
+    def __init__(self, model: Transformer, tokenizer):
+        self.model = model
         self.tokenizer = tokenizer
 
     def _prepare_generation_inputs(
@@ -31,17 +31,19 @@ class LanguageModel(Transformer):
         # and id 4 does not exist when our context length is 4, only ids 0, 1, 2, 3 exist.
         # For this reason we cannot roll the kv cache once it exceeds the context_length.
         can_roll_cache = (
-            kv_caches is not None and self.config.positional_embedding is None
+            kv_caches is not None and self.model.config.positional_embedding is None
         )
 
         if cache_is_populated and (
-            can_roll_cache or full_sequence.shape[-1] <= self.context_length
+            can_roll_cache or full_sequence.shape[-1] <= self.model.context_length
         ):
             model_input = full_sequence[:, -1:]
-        elif full_sequence.shape[-1] > self.context_length:
-            model_input = full_sequence[:, -self.context_length :]
+        elif full_sequence.shape[-1] > self.model.context_length:
+            model_input = full_sequence[:, -self.model.context_length :]
             if full_attention_mask is not None and not can_roll_cache:
-                model_attention_mask = full_attention_mask[:, -self.context_length :]
+                model_attention_mask = full_attention_mask[
+                    :, -self.model.context_length :
+                ]
 
             if kv_caches is not None:
                 for kv_cache in kv_caches:
@@ -85,10 +87,10 @@ class LanguageModel(Transformer):
         kv_caches = None
         if use_cache:
             cache_capacity = min(
-                self.context_length,
+                self.model.context_length,
                 input_ids.size(1) + max_new_tokens,
             )
-            kv_caches = [KVCache(capacity=cache_capacity) for _ in self.blocks]
+            kv_caches = [KVCache(capacity=cache_capacity) for _ in self.model.blocks]
 
         for _ in range(max_new_tokens):
             model_input, model_attention_mask = self._prepare_generation_inputs(
@@ -97,7 +99,7 @@ class LanguageModel(Transformer):
                 kv_caches,
             )
 
-            logits, _, _ = self(
+            logits, _, _ = self.model(
                 model_input,
                 attention_mask=model_attention_mask,
                 _kv_caches=kv_caches,

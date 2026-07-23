@@ -4,8 +4,8 @@ import os
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
-from lm_builder import LanguageModel
-from lm_builder.transformer import TransformerConfig
+from lm_builder import TextGenerationPipeline
+from lm_builder.transformer import Transformer, TransformerConfig
 from lm_builder.utils import change_state_dict_names, combine_qkv_projections
 
 
@@ -40,10 +40,9 @@ class Qwen3Loader:
 
     def build_model(self, rank):
         transformer_config = TransformerConfig.from_yml(self.MODEL_ARCH_FILE)
-        tokenizer = AutoTokenizer.from_pretrained(self.HF_MODEL_NAME)
 
         with torch.no_grad():
-            qwen3 = LanguageModel(transformer_config, tokenizer)
+            qwen3 = Transformer(transformer_config)
             qwen3.to(rank)
             qwen3.eval()
         return qwen3
@@ -85,7 +84,9 @@ def main():
         generation_config = GenerationConfig.from_pretrained(loader.HF_MODEL_NAME)
 
         qwen3.to(get_device())
-        qwen3.prompt(
+        tokenizer = AutoTokenizer.from_pretrained(loader.HF_MODEL_NAME)
+        pipeline = TextGenerationPipeline(qwen3, tokenizer)
+        pipeline.prompt(
             messages,
             max_new_tokens=4096,
             temperature=generation_config.temperature,

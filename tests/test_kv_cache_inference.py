@@ -2,7 +2,7 @@ import pytest
 import torch
 from torch.nn import functional as F
 
-from lm_builder import LanguageModel
+from lm_builder import TextGenerationPipeline
 from lm_builder.attention import (
     AttentionConfig,
     CausalMultiHeadAttention,
@@ -13,7 +13,7 @@ from lm_builder.attention import (
 from lm_builder.ffn import FeedForward, FeedForwardConfig
 from lm_builder.inference import KVCache
 from lm_builder.positional_embeddings import AbsolutePE, RotaryPE
-from lm_builder.transformer import TransformerConfig
+from lm_builder.transformer import Transformer, TransformerConfig
 
 
 def build_model(
@@ -68,7 +68,7 @@ def build_model(
         num_layers=num_layers,
         positional_embedding=AbsolutePE if position_type == "absolute" else None,
     )
-    return LanguageModel(config, tokenizer=None).eval()
+    return Transformer(config).eval()
 
 
 @pytest.mark.parametrize(
@@ -133,6 +133,7 @@ def test_cached_decode_matches_full_forward(
 def test_generate_prefills_once_then_decodes_single_tokens():
     torch.manual_seed(11)
     model = build_model(context_length=8)
+    pipeline = TextGenerationPipeline(model, tokenizer=None)
     projected_sequence_lengths = []
     hook = model.blocks[0].attn.qkv_proj.register_forward_pre_hook(
         lambda _, inputs: projected_sequence_lengths.append(inputs[0].size(1))
@@ -140,7 +141,7 @@ def test_generate_prefills_once_then_decodes_single_tokens():
 
     try:
         list(
-            model.generate(
+            pipeline.generate(
                 torch.tensor([[1, 2, 3]]),
                 max_new_tokens=3,
                 temperature=0,
@@ -150,7 +151,7 @@ def test_generate_prefills_once_then_decodes_single_tokens():
 
         projected_sequence_lengths.clear()
         list(
-            model.generate(
+            pipeline.generate(
                 torch.tensor([[1, 2, 3]]),
                 max_new_tokens=3,
                 temperature=0,
@@ -176,6 +177,7 @@ def test_generate_sizes_kv_cache_to_sequence_budget(
     expected_capacity,
 ):
     model = build_model(context_length=8)
+    pipeline = TextGenerationPipeline(model, tokenizer=None)
     created_caches = []
 
     def create_cache(capacity):
@@ -183,11 +185,14 @@ def test_generate_sizes_kv_cache_to_sequence_budget(
         created_caches.append(cache)
         return cache
 
-    monkeypatch.setattr("lm_builder.language_model.KVCache", create_cache)
+    monkeypatch.setattr(
+        "lm_builder.text_generation_pipeline.KVCache",
+        create_cache,
+    )
     input_ids = torch.arange(prompt_length).remainder(model.config.vocab_size)[None, :]
 
     list(
-        model.generate(
+        pipeline.generate(
             input_ids,
             max_new_tokens=max_new_tokens,
             temperature=0,
@@ -215,6 +220,7 @@ def test_absolute_position_cache_recomputes_across_context_overflow(attention_ty
         position_type="absolute",
         context_length=4,
     )
+    pipeline = TextGenerationPipeline(model, tokenizer=None)
     input_ids = torch.tensor([[0, 2, 3], [4, 5, 6]])
     attention_mask = torch.tensor([[0, 1, 1], [1, 1, 1]])
     projected_sequence_lengths = []
@@ -225,7 +231,7 @@ def test_absolute_position_cache_recomputes_across_context_overflow(attention_ty
     try:
         cached_tokens = torch.cat(
             list(
-                model.generate(
+                pipeline.generate(
                     input_ids,
                     attention_mask=attention_mask,
                     max_new_tokens=5,
@@ -239,7 +245,7 @@ def test_absolute_position_cache_recomputes_across_context_overflow(attention_ty
 
     uncached_tokens = torch.cat(
         list(
-            model.generate(
+            pipeline.generate(
                 input_ids,
                 attention_mask=attention_mask,
                 max_new_tokens=5,
@@ -272,6 +278,7 @@ def test_rolling_cache_keeps_single_token_decoding_after_overflow(
         position_type=position_type,
         context_length=4,
     )
+    pipeline = TextGenerationPipeline(model, tokenizer=None)
     projected_sequence_lengths = []
     hook = model.blocks[0].attn.qkv_proj.register_forward_pre_hook(
         lambda _, inputs: projected_sequence_lengths.append(inputs[0].size(1))
@@ -279,7 +286,7 @@ def test_rolling_cache_keeps_single_token_decoding_after_overflow(
 
     try:
         list(
-            model.generate(
+            pipeline.generate(
                 torch.tensor([[1, 2, 3]]),
                 attention_mask=torch.ones(1, 3, dtype=torch.long),
                 max_new_tokens=5,
@@ -312,6 +319,7 @@ def test_rolling_cache_handles_prompt_longer_than_context(
         context_length=4,
         num_layers=1,
     )
+    pipeline = TextGenerationPipeline(model, tokenizer=None)
     input_ids = torch.tensor([[0, 0, 2, 3, 4, 5], [6, 7, 8, 9, 10, 11]])
     attention_mask = (
         torch.tensor([[0, 0, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1]])
@@ -321,7 +329,7 @@ def test_rolling_cache_handles_prompt_longer_than_context(
 
     cached_tokens = torch.cat(
         list(
-            model.generate(
+            pipeline.generate(
                 input_ids,
                 attention_mask=attention_mask,
                 max_new_tokens=3,
@@ -332,7 +340,7 @@ def test_rolling_cache_handles_prompt_longer_than_context(
     )
     uncached_tokens = torch.cat(
         list(
-            model.generate(
+            pipeline.generate(
                 input_ids,
                 attention_mask=attention_mask,
                 max_new_tokens=3,
@@ -351,6 +359,7 @@ def test_rolling_cache_handles_context_length_one():
         position_type="rotary",
         context_length=1,
     )
+    pipeline = TextGenerationPipeline(model, tokenizer=None)
     projected_sequence_lengths = []
     hook = model.blocks[0].attn.qkv_proj.register_forward_pre_hook(
         lambda _, inputs: projected_sequence_lengths.append(inputs[0].size(1))
@@ -359,7 +368,7 @@ def test_rolling_cache_handles_context_length_one():
     try:
         cached_tokens = torch.cat(
             list(
-                model.generate(
+                pipeline.generate(
                     torch.tensor([[1]]),
                     max_new_tokens=3,
                     temperature=0,
@@ -372,7 +381,7 @@ def test_rolling_cache_handles_context_length_one():
 
     uncached_tokens = torch.cat(
         list(
-            model.generate(
+            pipeline.generate(
                 torch.tensor([[1]]),
                 max_new_tokens=3,
                 temperature=0,
@@ -395,6 +404,7 @@ def test_rolling_cache_supports_mixed_attention_layers():
         ratio=[1, 1],
         window_size=[2, None],
     )
+    pipeline = TextGenerationPipeline(model, tokenizer=None)
     projected_sequence_lengths = [[], []]
     hooks = [
         block.attn.qkv_proj.register_forward_pre_hook(
@@ -407,7 +417,7 @@ def test_rolling_cache_supports_mixed_attention_layers():
 
     try:
         list(
-            model.generate(
+            pipeline.generate(
                 torch.tensor([[1, 2, 3]]),
                 max_new_tokens=5,
                 temperature=0,
@@ -426,6 +436,7 @@ def test_rolling_cache_supports_mixed_attention_layers():
 def test_generation_uses_fresh_cache_for_each_call():
     torch.manual_seed(17)
     model = build_model(context_length=8)
+    pipeline = TextGenerationPipeline(model, tokenizer=None)
     projected_sequence_lengths = []
     hook = model.blocks[0].attn.qkv_proj.register_forward_pre_hook(
         lambda _, inputs: projected_sequence_lengths.append(inputs[0].size(1))
@@ -434,7 +445,7 @@ def test_generation_uses_fresh_cache_for_each_call():
     try:
         for _ in range(2):
             list(
-                model.generate(
+                pipeline.generate(
                     torch.tensor([[1, 2, 3]]),
                     max_new_tokens=2,
                     temperature=0,
@@ -461,10 +472,11 @@ def test_grouped_query_cache_keeps_native_kv_heads():
 
 def test_generate_requires_eval_mode_for_kv_cache():
     model = build_model().train()
+    pipeline = TextGenerationPipeline(model, tokenizer=None)
 
     with pytest.raises(AssertionError, match="eval mode"):
         list(
-            model.generate(
+            pipeline.generate(
                 torch.tensor([[1, 2, 3]]),
                 max_new_tokens=1,
                 temperature=0,
@@ -477,10 +489,11 @@ def test_generate_rejects_noncausal_attention_cache():
         attention_type=MultiHeadAttention,
         window_size=None,
     )
+    pipeline = TextGenerationPipeline(model, tokenizer=None)
 
     with pytest.raises(AssertionError, match="requires causal attention"):
         list(
-            model.generate(
+            pipeline.generate(
                 torch.tensor([[1, 2, 3]]),
                 max_new_tokens=1,
                 temperature=0,
@@ -488,7 +501,7 @@ def test_generate_rejects_noncausal_attention_cache():
         )
 
     tokens = list(
-        model.generate(
+        pipeline.generate(
             torch.tensor([[1, 2, 3]]),
             max_new_tokens=1,
             temperature=0,

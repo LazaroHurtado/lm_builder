@@ -106,15 +106,20 @@ is always one and therefore receives no routing gradient from cross-entropy.
 
 ### KV-cached generation
 
-`LanguageModel.generate()` and `LanguageModel.prompt()` use an inference-only KV
-cache by default for causal attention models. The prompt is evaluated once, then
+`TextGenerationPipeline.generate()` and `TextGenerationPipeline.prompt()` use an
+inference-only KV cache by default for causal attention models. The pipeline owns
+a `Transformer` and tokenizer while leaving model parameters, device placement,
+and compilation on the transformer itself. The prompt is evaluated once, then
 only the newest token is evaluated. Each layer allocates
 `min(context_length, prompt_length + max_new_tokens)` cache entries instead of
 always allocating the full context window. The model must be in evaluation mode.
 Set `use_cache=False` to use full-sequence recomputation instead:
 
 ```python
-output = model.prompt("Hello", use_cache=False)
+from lm_builder import TextGenerationPipeline
+
+pipeline = TextGenerationPipeline(model, tokenizer)
+output = pipeline.prompt("Hello", use_cache=False)
 ```
 
 For rotary or no positional embeddings, a full cache evicts its oldest key/value

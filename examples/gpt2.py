@@ -6,8 +6,8 @@ import torch
 import torch.nn as nn
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from lm_builder import LanguageModel
-from lm_builder.transformer import TransformerConfig
+from lm_builder import TextGenerationPipeline
+from lm_builder.transformer import Transformer, TransformerConfig
 from lm_builder.utils import change_state_dict_names
 
 
@@ -46,12 +46,8 @@ class GPT2Loader:
             approximate="tanh",
         )
 
-        tokenizer = AutoTokenizer.from_pretrained(
-            GPT2Loader.HF_MODEL_NAME, clean_up_tokenization_spaces=True
-        )
-
         with torch.no_grad():
-            gpt2_xl = LanguageModel(transformer_config, tokenizer)
+            gpt2_xl = Transformer(transformer_config)
             gpt2_xl.to(rank)
             gpt2_xl.eval()
         return gpt2_xl
@@ -100,6 +96,10 @@ def main():
         gc.collect()
 
         gpt2_xl.to(get_device())
+        tokenizer = AutoTokenizer.from_pretrained(
+            GPT2Loader.HF_MODEL_NAME, clean_up_tokenization_spaces=True
+        )
+        pipeline = TextGenerationPipeline(gpt2_xl, tokenizer)
         prompt = "Claude Shannon, the"
         generation_kwargs = {
             "max_new_tokens": 200,
@@ -111,7 +111,7 @@ def main():
 
         print("Generating with KV cache:")
         print(prompt, end="", flush=True)
-        gpt2_xl.prompt(
+        pipeline.prompt(
             prompt,
             use_cache=True,
             **generation_kwargs,
@@ -119,7 +119,7 @@ def main():
 
         print("\nGenerating without KV cache:")
         print(prompt, end="", flush=True)
-        gpt2_xl.prompt(
+        pipeline.prompt(
             prompt,
             use_cache=False,
             **generation_kwargs,
