@@ -13,14 +13,16 @@ from lm_builder.transformer import Transformer, TransformerConfig
 
 DATASET_NAME = "roneneldan/TinyStories"
 TOKENIZER_NAME = "openai-community/gpt2"
-CHECKPOINT_PATH = "tinystories_200m_weights.pth"
-MODEL_CONFIG_PATH = Path(__file__).with_name("tinystories_200m.yml")
+CHECKPOINT_PATH = "tinystories_720m_weights.pth"
+MODEL_CONFIG_PATH = Path(__file__).with_name("tinystories_720m.yml")
 
 SHUFFLE_BUFFER_SIZE = 10_000
-BATCH_SIZE = 16
-GRADIENT_ACCUMULATION_STEPS = 4
-EPOCHS = 3
+BATCH_SIZE = 4
+GRADIENT_ACCUMULATION_STEPS = 16
+EPOCHS = 2
 LEARNING_RATE = 3e-4
+# Weight for the mixture-of-experts load-balancing (routing) auxiliary loss.
+ROUTING_LOSS_COEFFICIENT = 0.01
 SEED = 42
 
 
@@ -110,7 +112,9 @@ def train_epoch(
     device = next(model.parameters()).device
     amp_dtype = get_amp_dtype(device)
     model.train()
+    model = torch.compile(model, fullgraph=False)
     running_loss = 0.0
+    running_routing_loss = 0.0
     total_batches = math.ceil(stories.info.splits["train"].num_examples / BATCH_SIZE)
     batch_progress = tqdm(
         build_dataloader(
@@ -126,6 +130,7 @@ def train_epoch(
     )
 
     average_loss = None
+    average_routing_loss = None
     grad_norm = None
     optimizer_steps = 0
     optimizer.zero_grad(set_to_none=True)
@@ -143,12 +148,21 @@ def train_epoch(
             dtype=amp_dtype,
             enabled=device.type == "cuda",
         ):
-            _, loss = model(
+            _, loss, routing_loss = model(
                 batch["input_ids"],
                 targets=batch["targets"],
                 attention_mask=batch["attention_mask"],
             )
-        if not torch.isfinite(loss).item():
+
+        # Mixture-of-experts blocks return an auxiliary routing loss that keeps
+        # the router from collapsing onto a few experts. Dense feed-forward
+        # blocks return None, in which case the total loss is just the
+        # cross-entropy loss.
+        total_loss = loss
+        if routing_loss is not None:
+            total_loss = loss + ROUTING_LOSS_COEFFICIENT * routing_loss
+
+        if not torch.isfinite(total_loss).item():
             raise FloatingPointError(
                 f"Non-finite loss at epoch {epoch}, training step {step}."
             )
@@ -160,7 +174,7 @@ def train_epoch(
             GRADIENT_ACCUMULATION_STEPS,
             total_batches - accumulation_group_start,
         )
-        scaler.scale(loss / accumulation_group_size).backward()
+        scaler.scale(total_loss / accumulation_group_size).backward()
 
         should_update = step % GRADIENT_ACCUMULATION_STEPS == 0 or step == total_batches
         if should_update:
@@ -178,20 +192,25 @@ def train_epoch(
         batch_loss = loss.item()
         running_loss += batch_loss
         average_loss = running_loss / step
-        batch_progress.set_postfix(
-            loss=f"{batch_loss:.3f}",
-            avg_loss=f"{average_loss:.3f}",
-            perplexity=f"{math.exp(min(average_loss, 20)):.1f}",
-            grad_norm=f"{grad_norm.item():.2f}" if grad_norm is not None else "-",
-            lr=f"{optimizer.param_groups[0]['lr']:.1e}",
-            updates=optimizer_steps,
-        )
+        postfix = {
+            "loss": f"{batch_loss:.3f}",
+            "avg_loss": f"{average_loss:.3f}",
+            "perplexity": f"{math.exp(min(average_loss, 20)):.1f}",
+            "grad_norm": f"{grad_norm.item():.2f}" if grad_norm is not None else "-",
+            "lr": f"{optimizer.param_groups[0]['lr']:.1e}",
+            "updates": optimizer_steps,
+        }
+        if routing_loss is not None:
+            running_routing_loss += routing_loss.item()
+            average_routing_loss = running_routing_loss / step
+            postfix["routing_loss"] = f"{average_routing_loss:.3f}"
+        batch_progress.set_postfix(**postfix)
 
     if average_loss is None:
         raise RuntimeError(
             "The TinyStories stream did not produce any training batches."
         )
-    return average_loss
+    return average_loss, average_routing_loss
 
 
 def train(model, tokenizer, stories, device):
@@ -209,7 +228,7 @@ def train(model, tokenizer, stories, device):
 
     epoch_progress = trange(1, EPOCHS + 1, desc="Training")
     for epoch in epoch_progress:
-        average_loss = train_epoch(
+        average_loss, average_routing_loss = train_epoch(
             model,
             tokenizer,
             stories,
@@ -218,10 +237,13 @@ def train(model, tokenizer, stories, device):
             epoch,
         )
 
-        epoch_progress.set_postfix(
-            loss=f"{average_loss:.3f}",
-            perplexity=f"{math.exp(min(average_loss, 20)):.1f}",
-        )
+        postfix = {
+            "loss": f"{average_loss:.3f}",
+            "perplexity": f"{math.exp(min(average_loss, 20)):.1f}",
+        }
+        if average_routing_loss is not None:
+            postfix["routing_loss"] = f"{average_routing_loss:.3f}"
+        epoch_progress.set_postfix(**postfix)
 
 
 def main():

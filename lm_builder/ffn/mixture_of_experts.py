@@ -109,7 +109,7 @@ class GroupedExperts(nn.Module):
         #  Equal expert IDs may appear in a different order without
         #  changing the grouping. Here expert 1's positions are [2, 5].
         #  Dividing by top_k and flooring maps them to token IDs [1, 2].
-        
+
         # NOTE: We are doing sparse MoE routing by excluding the inactive experts,
         # rather than running all experts with 0 masking
         assignment_indices = torch.nonzero(

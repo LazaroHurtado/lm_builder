@@ -13,8 +13,11 @@ attention_config:
   layers:
     - type: CausalMultiHeadAttention
 ffn_config:
-  type: ClassicFeedForward
+  type: MixtureOfExperts
   intermediate_dimension: 3072
+  num_experts: 4
+  top_k: 2
+  num_shared_experts: 1
   dropout: 0.1
   activation_fn: GELU
   bias: true
