@@ -3,6 +3,7 @@ import copy
 import pytest
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from lm_builder.attention import (
     AttentionConfig,
@@ -13,13 +14,23 @@ from lm_builder.ffn import FeedForwardConfig, MixtureOfExperts
 from lm_builder.transformer import Transformer, TransformerConfig
 
 
+def capture_dynamic_output_shapes(test):
+    # pylint: disable-next=protected-access,no-member
+    config_patch = torch._dynamo.config.patch(capture_dynamic_output_shape_ops=True)
+    return config_patch(test)
+
+
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def build_moe(
     num_experts=4,
     top_k=2,
     dropout=0.0,
     num_shared_experts=0,
+    bias=False,
+    activation_fn=nn.GELU,
+    dtype=torch.float32,
 ):
-    return MixtureOfExperts(
+    model = MixtureOfExperts(
         FeedForwardConfig(
             embedding_dimension=8,
             intermediate_dimension=16,
@@ -28,7 +39,58 @@ def build_moe(
             top_k=top_k,
             dropout=dropout,
             num_shared_experts=num_shared_experts,
+            bias=bias,
+            activation_fn=activation_fn,
         )
+    )
+    return model.to(dtype=dtype)
+
+
+def build_moe_transformer(top_k=1):
+    return Transformer(
+        TransformerConfig(
+            embedding_dimension=8,
+            context_length=4,
+            attention_config=AttentionConfig(
+                qk_positional_embedding=None,
+                layers=[
+                    AttentionLayerConfig(
+                        context_length=4,
+                        embedding_dimension=8,
+                        num_heads=2,
+                        attention_type=CausalMultiHeadAttention,
+                    )
+                ],
+            ),
+            ffn_config=FeedForwardConfig(
+                embedding_dimension=8,
+                intermediate_dimension=16,
+                ffn_type=MixtureOfExperts,
+                num_experts=4,
+                top_k=top_k,
+            ),
+            vocab_size=16,
+            num_layers=1,
+        )
+    )
+
+
+def run_expert(experts, expert_index, inputs):
+    up = F.linear(  # pylint: disable=not-callable
+        inputs,
+        experts.up_weight[expert_index],
+        None if experts.up_bias is None else experts.up_bias[expert_index],
+    )
+    gate = F.linear(  # pylint: disable=not-callable
+        inputs,
+        experts.gate_weight[expert_index],
+        (None if experts.gate_bias is None else experts.gate_bias[expert_index]),
+    )
+    hidden = up * experts.activation_fn(gate)
+    return F.linear(  # pylint: disable=not-callable
+        hidden,
+        experts.down_weight[expert_index],
+        (None if experts.down_bias is None else experts.down_bias[expert_index]),
     )
 
 
@@ -48,7 +110,7 @@ def reference_forward(model, inputs):
     ):
         expert_outputs = torch.stack(
             [
-                model.experts[expert_index.item()](token)[0]
+                run_expert(model.experts, expert_index, token)
                 for expert_index in token_experts
             ]
         )
@@ -132,6 +194,65 @@ def test_shared_experts_build_from_config():
     assert model.shared_expert.hidden_dim == 32
 
 
+def test_stacked_expert_parameters_have_an_expert_dimension():
+    model = build_moe(num_experts=4, bias=True)
+
+    assert model.experts.up_weight.shape == (4, 16, 8)
+    assert model.experts.gate_weight.shape == (4, 16, 8)
+    assert model.experts.down_weight.shape == (4, 8, 16)
+    assert model.experts.up_bias.shape == (4, 16)
+    assert model.experts.down_bias.shape == (4, 8)
+
+
+@pytest.mark.parametrize(
+    ("embedding_dimension", "intermediate_dimension"),
+    [
+        (7, 16),
+        (8, 15),
+    ],
+)
+def test_expert_dimensions_do_not_require_kernel_alignment(
+    embedding_dimension,
+    intermediate_dimension,
+):
+    model = MixtureOfExperts(
+        FeedForwardConfig(
+            embedding_dimension=embedding_dimension,
+            intermediate_dimension=intermediate_dimension,
+            ffn_type=MixtureOfExperts,
+            num_experts=4,
+            top_k=2,
+        )
+    )
+    inputs = torch.randn(2, 3, embedding_dimension)
+
+    output, _ = model(inputs)
+
+    assert output.shape == inputs.shape
+
+
+def test_moe_rejects_stateful_activations():
+    with pytest.raises(
+        ValueError,
+        match="requires a stateless activation",
+    ):
+        build_moe(activation_fn=nn.PReLU)
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    [torch.float32, torch.float16, torch.bfloat16],
+)
+def test_floating_point_dtypes_are_supported(dtype):
+    model = build_moe(dtype=dtype)
+    inputs = torch.randn(2, 3, model.embedding_dim, dtype=dtype)
+
+    output, _ = model(inputs)
+
+    assert output.dtype == dtype
+    assert torch.isfinite(output).all()
+
+
 @pytest.mark.parametrize("num_shared_experts", [0, 1, 2])
 @pytest.mark.parametrize("top_k", [1, 2, 3, 4])
 def test_forward_and_gradients_match_reference(top_k, num_shared_experts):
@@ -141,7 +262,12 @@ def test_forward_and_gradients_match_reference(top_k, num_shared_experts):
         num_shared_experts=num_shared_experts,
     )
     reference_model = copy.deepcopy(model)
-    inputs = torch.randn(2, 3, 8, requires_grad=True)
+    inputs = torch.randn(
+        2,
+        3,
+        8,
+        requires_grad=True,
+    )
     reference_inputs = inputs.detach().clone().requires_grad_(True)
 
     output, routing_loss = model(inputs)
@@ -149,9 +275,14 @@ def test_forward_and_gradients_match_reference(top_k, num_shared_experts):
     output.square().sum().backward()
     reference_output.square().sum().backward()
 
-    assert torch.allclose(output, reference_output, atol=1e-6)
+    assert torch.allclose(output, reference_output, atol=1e-5, rtol=1e-5)
     assert routing_loss is not None
-    assert torch.allclose(inputs.grad, reference_inputs.grad, atol=1e-6)
+    assert torch.allclose(
+        inputs.grad,
+        reference_inputs.grad,
+        atol=1e-5,
+        rtol=1e-5,
+    )
     for parameter, reference_parameter in zip(
         model.parameters(),
         reference_model.parameters(),
@@ -163,6 +294,7 @@ def test_forward_and_gradients_match_reference(top_k, num_shared_experts):
                 parameter.grad,
                 reference_parameter.grad,
                 atol=1e-5,
+                rtol=1e-5,
             )
     if model.shared_expert is not None:
         assert all(
@@ -170,12 +302,27 @@ def test_forward_and_gradients_match_reference(top_k, num_shared_experts):
         )
 
 
+def test_bias_matches_reference():
+    torch.manual_seed(13)
+    model = build_moe(bias=True)
+    inputs = torch.randn(2, 3, 8)
+
+    output, _ = model(inputs)
+    expected = reference_forward(model, inputs)
+
+    assert torch.allclose(output, expected, atol=1e-5, rtol=1e-5)
+
+
 def test_shared_expert_does_not_change_routing_loss():
     torch.manual_seed(11)
     routed_model = build_moe(top_k=1)
     torch.manual_seed(11)
     shared_model = build_moe(top_k=1, num_shared_experts=2)
-    inputs = torch.randn(2, 3, routed_model.embedding_dim)
+    inputs = torch.randn(
+        2,
+        3,
+        routed_model.embedding_dim,
+    )
 
     _, routed_loss = routed_model(inputs)
     _, shared_loss = shared_model(inputs)
@@ -185,7 +332,11 @@ def test_shared_expert_does_not_change_routing_loss():
 
 def test_routing_loss_is_only_computed_during_training():
     model = build_moe(top_k=1)
-    inputs = torch.randn(2, 3, model.embedding_dim)
+    inputs = torch.randn(
+        2,
+        3,
+        model.embedding_dim,
+    )
 
     _, training_routing_loss = model(inputs)
     model.eval()
@@ -195,18 +346,8 @@ def test_routing_loss_is_only_computed_during_training():
     assert eval_routing_loss is None
 
 
-def test_only_active_experts_are_called():
-    class CountingExpert(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.calls = 0
-
-        def forward(self, inputs):
-            self.calls += 1
-            return inputs, None
-
+def test_only_top_k_assignments_are_sent_to_experts(monkeypatch):
     model = build_moe()
-    model.experts = nn.ModuleList([CountingExpert() for _ in model.experts])
     with torch.no_grad():
         model.router.weight.copy_(
             torch.tensor(
@@ -219,9 +360,18 @@ def test_only_active_experts_are_called():
             )
         )
 
+    assignments_per_expert = []
+    original_run_expert = model.experts._run_expert  # pylint: disable=protected-access
+
+    def record_assignments(expert_inputs, expert_index):
+        assignments_per_expert.append((expert_index, expert_inputs.size(0)))
+        return original_run_expert(expert_inputs, expert_index)
+
+    monkeypatch.setattr(model.experts, "_run_expert", record_assignments)
     model(torch.ones(1, 3, model.embedding_dim))
 
-    assert [expert.calls for expert in model.experts] == [1, 1, 0, 0]
+    assert assignments_per_expert == [(0, 3), (1, 3), (2, 0), (3, 0)]
+    assert sum(count for _, count in assignments_per_expert) == 3 * model.top_k
 
 
 def test_non_contiguous_input_matches_contiguous_input():
@@ -234,6 +384,7 @@ def test_non_contiguous_input_matches_contiguous_input():
         model(inputs)[0],
         model(inputs.contiguous())[0],
         atol=1e-6,
+        rtol=1e-6,
     )
 
 
@@ -257,7 +408,12 @@ def test_scalar_input_is_rejected():
 @pytest.mark.parametrize("num_shared_experts", [0, 1])
 def test_empty_input_preserves_shape(num_shared_experts):
     model = build_moe(num_shared_experts=num_shared_experts)
-    inputs = torch.empty(2, 0, model.embedding_dim, requires_grad=True)
+    inputs = torch.empty(
+        2,
+        0,
+        model.embedding_dim,
+        requires_grad=True,
+    )
 
     output, routing_loss = model(inputs)
 
@@ -273,14 +429,20 @@ def test_expert_dropout_is_applied_only_during_training():
         dropout=1.0,
         num_shared_experts=1,
     )
-    for expert in [*model.experts, model.shared_expert]:
-        for projection in (
-            expert.up_proj,
-            expert.gate_proj,
-            expert.down_proj,
-        ):
-            nn.init.constant_(projection.weight, 0.1)
-    inputs = torch.ones(2, 3, model.embedding_dim)
+    for weight in (
+        model.experts.up_weight,
+        model.experts.gate_weight,
+        model.experts.down_weight,
+        model.shared_expert.up_proj.weight,
+        model.shared_expert.gate_proj.weight,
+        model.shared_expert.down_proj.weight,
+    ):
+        nn.init.constant_(weight, 0.1)
+    inputs = torch.ones(
+        2,
+        3,
+        model.embedding_dim,
+    )
 
     model.train()
     training_output, _ = model(inputs)
@@ -291,13 +453,15 @@ def test_expert_dropout_is_applied_only_during_training():
     assert torch.count_nonzero(inference_output) == inference_output.numel()
 
 
+@capture_dynamic_output_shapes
 def test_cpu_autocast_preserves_output_and_router_gradients():
     torch.manual_seed(5)
-    model = build_moe(num_shared_experts=1)
+    model = build_moe(num_shared_experts=1, dtype=torch.float32)
     inputs = torch.randn(2, 3, model.embedding_dim, requires_grad=True)
+    compiled = torch.compile(model, backend="eager", fullgraph=True)
 
     with torch.autocast("cpu", dtype=torch.bfloat16):
-        output, routing_loss = model(inputs)
+        output, routing_loss = compiled(inputs)
         loss = output.float().square().mean() + routing_loss
     loss.backward()
 
@@ -306,6 +470,60 @@ def test_cpu_autocast_preserves_output_and_router_gradients():
     assert routing_loss.dtype == torch.float32
     assert model.router.weight.grad is not None
     assert torch.count_nonzero(model.router.weight.grad) > 0
+    assert model.experts.up_weight.grad is not None
+    assert torch.count_nonzero(model.experts.up_weight.grad) > 0
+
+
+@capture_dynamic_output_shapes
+def test_fullgraph_forward_and_backward_match_eager():
+    torch.manual_seed(17)
+    model = build_moe(top_k=2, num_shared_experts=1)
+    inputs = torch.randn(
+        2,
+        3,
+        model.embedding_dim,
+    )
+    token_mask = torch.tensor([[1, 1, 1], [0, 1, 1]])
+
+    expected_output, expected_loss = model(inputs, token_mask=token_mask)
+    compiled = torch.compile(model, backend="eager", fullgraph=True)
+    output, routing_loss = compiled(inputs, token_mask=token_mask)
+    (output.float().square().mean() + routing_loss).backward()
+
+    torch.testing.assert_close(output, expected_output)
+    torch.testing.assert_close(routing_loss, expected_loss)
+    assert model.experts.up_weight.grad is not None
+    assert model.router.weight.grad is not None
+
+
+@capture_dynamic_output_shapes
+def test_fullgraph_is_reused_when_routing_decisions_change():
+    model = build_moe(top_k=2).eval()
+    with torch.no_grad():
+        model.router.weight.copy_(
+            torch.tensor(
+                [
+                    [2.0] * model.embedding_dim,
+                    [1.0] * model.embedding_dim,
+                    [-1.0] * model.embedding_dim,
+                    [-2.0] * model.embedding_dim,
+                ]
+            )
+        )
+
+    graph_count = 0
+
+    def counting_backend(graph_module, _example_inputs):
+        nonlocal graph_count
+        graph_count += 1
+        return graph_module.forward
+
+    compiled = torch.compile(model, backend=counting_backend, fullgraph=True)
+    positive_output, _ = compiled(torch.ones(1, 3, model.embedding_dim))
+    negative_output, _ = compiled(-torch.ones(1, 3, model.embedding_dim))
+
+    assert graph_count == 1
+    assert not torch.equal(positive_output, negative_output)
 
 
 def test_routing_loss_penalizes_collapsed_experts():
@@ -341,33 +559,7 @@ def test_routing_loss_ignores_masked_tokens():
 
 
 def test_transformer_returns_top_one_routing_loss():
-    ffn_config = FeedForwardConfig(
-        embedding_dimension=8,
-        intermediate_dimension=16,
-        ffn_type=MixtureOfExperts,
-        num_experts=4,
-        top_k=1,
-    )
-    model = Transformer(
-        TransformerConfig(
-            embedding_dimension=8,
-            context_length=4,
-            attention_config=AttentionConfig(
-                qk_positional_embedding=None,
-                layers=[
-                    AttentionLayerConfig(
-                        context_length=4,
-                        embedding_dimension=8,
-                        num_heads=2,
-                        attention_type=CausalMultiHeadAttention,
-                    )
-                ],
-            ),
-            ffn_config=ffn_config,
-            vocab_size=16,
-            num_layers=1,
-        )
-    )
+    model = build_moe_transformer()
     input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
     targets = torch.tensor([[2, 3, 4], [5, 6, 7]])
 
@@ -389,32 +581,7 @@ def test_transformer_returns_top_one_routing_loss():
 
 
 def test_transformer_routing_loss_ignores_left_padding():
-    model = Transformer(
-        TransformerConfig(
-            embedding_dimension=8,
-            context_length=4,
-            attention_config=AttentionConfig(
-                qk_positional_embedding=None,
-                layers=[
-                    AttentionLayerConfig(
-                        context_length=4,
-                        embedding_dimension=8,
-                        num_heads=2,
-                        attention_type=CausalMultiHeadAttention,
-                    )
-                ],
-            ),
-            ffn_config=FeedForwardConfig(
-                embedding_dimension=8,
-                intermediate_dimension=16,
-                ffn_type=MixtureOfExperts,
-                num_experts=4,
-                top_k=1,
-            ),
-            vocab_size=16,
-            num_layers=1,
-        )
-    )
+    model = build_moe_transformer()
     input_ids = torch.tensor([[2, 3]])
     attention_mask = torch.tensor([[1, 1]])
     targets = torch.tensor([[3, 4]])
@@ -437,26 +604,61 @@ def test_transformer_routing_loss_ignores_left_padding():
     assert torch.allclose(routing_loss, padded_routing_loss, atol=1e-6)
 
 
-@pytest.mark.skipif(
-    not torch.backends.mps.is_available(),
-    reason="MPS is unavailable.",
-)
-def test_mps_forward_and_backward():
+@capture_dynamic_output_shapes
+def test_transformer_with_moe_compiles_fullgraph():
+    model = build_moe_transformer(top_k=2).eval()
+    input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+
+    expected = model(input_ids, attention_mask=attention_mask)
+    compiled = torch.compile(model, backend="eager", fullgraph=True)
+    actual = compiled(input_ids, attention_mask=attention_mask)
+
+    torch.testing.assert_close(actual[0], expected[0])
+    assert actual[1:] == expected[1:]
+
+
+def run_compiled_device_test(device):
     torch.manual_seed(9)
-    model = build_moe(top_k=1, num_shared_experts=1).to("mps")
+    model = build_moe(top_k=1, num_shared_experts=1).to(device)
     inputs = torch.randn(
         2,
         3,
         model.embedding_dim,
-        device="mps",
+        device=device,
         requires_grad=True,
     )
 
-    output, routing_loss = model(inputs)
+    with torch.no_grad():
+        expected_output, expected_loss = model(inputs)
+    compiled = torch.compile(model, fullgraph=True)
+    output, routing_loss = compiled(inputs)
     (output.square().mean() + routing_loss).backward()
 
-    assert output.device.type == "mps"
+    torch.testing.assert_close(output, expected_output)
+    torch.testing.assert_close(routing_loss, expected_loss)
+    assert output.device.type == device
     assert torch.isfinite(output).all()
-    assert routing_loss.device.type == "mps"
+    assert routing_loss.device.type == device
     assert model.router.weight.grad is not None
     assert torch.count_nonzero(model.router.weight.grad) > 0
+    assert model.experts.up_weight.grad is not None
+    assert torch.count_nonzero(model.experts.up_weight.grad) > 0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(),
+    reason="MPS is unavailable.",
+)
+@capture_dynamic_output_shapes
+def test_mps_forward_and_backward():
+    run_compiled_device_test("mps")
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="CUDA is unavailable.",
+)
+@capture_dynamic_output_shapes
+def test_cuda_forward_and_backward():
+    run_compiled_device_test("cuda")

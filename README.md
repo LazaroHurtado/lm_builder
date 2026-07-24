@@ -118,6 +118,29 @@ if routing_loss is not None:
 Top-1 routing depends on this auxiliary loss because its selected expert weight
 is always one and therefore receives no routing gradient from cross-entropy.
 
+`GroupedExperts`, defined alongside `MixtureOfExperts`, owns the stacked
+routed-expert parameters. Its forward method selects one expert's assigned
+tokens, then evaluates them with ordinary `torch.nn.functional.linear` calls.
+`MixtureOfExperts` loops over the configured experts and combines those outputs.
+This remains computationally sparse: it executes exactly `tokens * top_k`
+assignments rather than evaluating every expert for every token. It supports the
+dtypes, dimensions, and devices supported by the underlying linear operations.
+
+Per-expert token selection uses `torch.nonzero`, whose output size depends on
+routing decisions. Enable dynamic-output capture when requesting a single full
+graph:
+
+```python
+import torch
+
+torch._dynamo.config.capture_dynamic_output_shape_ops = True
+compiled_model = torch.compile(model, fullgraph=True)
+```
+
+This portable path avoids a specialized grouped-matrix-multiplication kernel,
+but dynamic `nonzero` operations may introduce synchronization or reduce
+compiler performance. Routed activation modules must remain stateless.
+
 ### KV-cached generation
 
 `TextGenerationPipeline.generate()` and `TextGenerationPipeline.prompt()` use an
