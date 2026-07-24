@@ -57,34 +57,11 @@ class Transformer(nn.Module):
     def _tie_word_embeddings(self, *args, **kwargs):  # pylint: disable=unused-argument
         self.lm_head.weight = self.wte.weight
 
-    def _get_cached_sequence_length(self, kv_caches):
-        if kv_caches is None:
-            return 0
-        if len(kv_caches) != len(self.blocks):
-            raise ValueError("A KV cache is required for each transformer block.")
-
-        cache_lengths = {cache.sequence_length for cache in kv_caches}
-        if len(cache_lengths) > 1:
-            raise ValueError("All transformer KV caches must have equal lengths.")
-
-        return cache_lengths.pop()
-
-    def _get_cached_tokens_seen(self, kv_caches):
-        if kv_caches is None:
-            return 0
-
-        token_counts = {cache.tokens_seen for cache in kv_caches}
-        if len(token_counts) > 1:
-            raise ValueError("All transformer KV caches must have equal token counts.")
-
-        return token_counts.pop()
-
     @staticmethod
     def _prepare_position_ids(
         x,
         position_ids,
         attention_mask,
-        cached_tokens_seen,
     ):
         batch_size, sequence_length = x.size()
         expected_shape = (batch_size, sequence_length)
@@ -98,10 +75,8 @@ class Transformer(nn.Module):
             position_ids = attention_mask.long().cumsum(dim=-1) - 1
             position_ids.masked_fill_(~attention_mask, 0)
             return position_ids[:, -sequence_length:]
-
         return torch.arange(
-            cached_tokens_seen,
-            cached_tokens_seen + sequence_length,
+            sequence_length,
             device=x.device,
             dtype=torch.long,
         ).expand(batch_size, -1)
@@ -112,35 +87,41 @@ class Transformer(nn.Module):
         targets=None,
         attention_mask=None,
         position_ids=None,
+        cache_position=None,
         *,
         _kv_caches=None,
     ):
         B, T = x.size()  # pylint: disable=invalid-name
         assert T <= self.context_length
 
-        cached_sequence_length = self._get_cached_sequence_length(_kv_caches)
-        cached_tokens_seen = self._get_cached_tokens_seen(_kv_caches)
-        key_sequence_length = min(
-            cached_sequence_length + T,
-            self.context_length,
-        )
+        if _kv_caches is not None:
+            if len(_kv_caches) != len(self.blocks):
+                raise ValueError("A KV cache is required for each transformer block.")
+            if position_ids is None:
+                raise ValueError("Position IDs are required when using a KV cache.")
+            if cache_position is None:
+                raise ValueError("Cache positions are required when using a KV cache.")
+            if cache_position.ndim != 1 or cache_position.numel() != T:
+                raise ValueError(
+                    "Cache positions must match the input sequence length."
+                )
+            cache_position = cache_position.to(device=x.device, dtype=torch.long)
 
         if attention_mask is not None:
             if (
                 attention_mask.ndim != 2
                 or attention_mask.size(0) != B
-                or attention_mask.size(1) < key_sequence_length
+                or attention_mask.size(1) < T
             ):
-                raise ValueError(
-                    "Attention mask must contain the complete key sequence shape."
-                )
+                raise ValueError("Attention mask must cover the input sequence.")
             attention_mask = attention_mask.to(device=x.device, dtype=bool)
+            if _kv_caches is not None:
+                attention_mask = attention_mask[:, -T:]
 
         position_ids = self._prepare_position_ids(
             x,
             position_ids,
             attention_mask,
-            cached_tokens_seen,
         )
 
         # Token embedding layer
@@ -165,6 +146,7 @@ class Transformer(nn.Module):
                 attention_mask=attention_mask,
                 qk_position_data=qk_position_data,
                 kv_cache=kv_cache,
+                cache_position=cache_position,
             )
             if routing_loss is not None:
                 routing_losses.append(routing_loss)

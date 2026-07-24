@@ -30,11 +30,10 @@ def test_causal_attention_builds_windowed_mask(attention_type):
         )
     )
 
-    attention_mask = attention._build_explicit_attention_mask(
-        attention_mask=None,
-        batch_size=1,
+    attention_mask = attention._build_base_attention_mask(
         query_length=5,
         key_length=5,
+        device=attention.qkv_proj.weight.device,
     )
 
     expected_mask = torch.tensor(
@@ -62,15 +61,43 @@ def test_windowed_mask_aligns_cached_queries_to_the_end():
         )
     )
 
-    attention_mask = attention._build_explicit_attention_mask(
-        attention_mask=None,
-        batch_size=1,
+    attention_mask = attention._build_base_attention_mask(
         query_length=1,
         key_length=5,
+        device=attention.qkv_proj.weight.device,
     )
 
     expected_mask = torch.tensor(
         [[0, 0, 1, 1, 1]],
+        dtype=torch.bool,
+    )[None, None, :, :]
+    assert torch.equal(attention_mask, expected_mask)
+
+
+def test_windowed_mask_uses_logical_ring_buffer_positions():
+    attention = GroupedQueryAttention(
+        AttentionLayerConfig(
+            context_length=5,
+            embedding_dimension=8,
+            num_heads=4,
+            attention_type=GroupedQueryAttention,
+            kv_heads=2,
+            window_size=3,
+        )
+    )
+
+    attention_mask = attention._build_base_attention_mask(
+        query_length=1,
+        key_length=5,
+        device=attention.qkv_proj.weight.device,
+        attention_positions=(
+            torch.tensor([5]),
+            torch.tensor([5, 1, 2, 3, 4]),
+        ),
+    )
+
+    expected_mask = torch.tensor(
+        [[1, 0, 0, 1, 1]],
         dtype=torch.bool,
     )[None, None, :, :]
     assert torch.equal(attention_mask, expected_mask)
@@ -87,11 +114,10 @@ def test_causal_attention_without_window_builds_full_triangle():
         )
     )
 
-    attention_mask = attention._build_explicit_attention_mask(
-        attention_mask=None,
-        batch_size=1,
+    attention_mask = attention._build_base_attention_mask(
         query_length=4,
         key_length=4,
+        device=attention.qkv_proj.weight.device,
     )
 
     expected_mask = torch.ones(4, 4, dtype=torch.bool).tril()[None, None, :, :]
@@ -111,11 +137,10 @@ def test_windowed_attention_uses_only_the_current_window():
     query = torch.zeros(1, 1, 4, 1)
     key = torch.zeros(1, 1, 4, 1)
     value = torch.tensor([[[[1.0], [2.0], [4.0], [8.0]]]])
-    attention_mask = attention._build_explicit_attention_mask(
-        attention_mask=None,
-        batch_size=1,
+    attention_mask = attention._build_base_attention_mask(
         query_length=4,
         key_length=4,
+        device=attention.qkv_proj.weight.device,
     )
 
     output = attention.attention(query, key, value, attention_mask)

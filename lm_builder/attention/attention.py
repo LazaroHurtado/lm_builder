@@ -12,6 +12,7 @@ class Attention(nn.Module):
         attention_mask=None,
         qk_position_data=None,
         kv_cache=None,
+        cache_position=None,
     ): ...
 
     @abstractmethod

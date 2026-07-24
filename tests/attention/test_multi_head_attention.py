@@ -285,7 +285,49 @@ def test_qk_norm_preserves_kv_dtype_during_autocast():
     kv_cache = KVCache(capacity=4)
 
     with torch.autocast("cpu", dtype=torch.bfloat16):
-        attention(torch.randn(2, 4, 8), kv_cache=kv_cache)
+        attention(
+            torch.randn(2, 4, 8),
+            kv_cache=kv_cache,
+            cache_position=torch.arange(4),
+        )
 
     assert kv_cache.k.dtype is torch.bfloat16
     assert kv_cache.v.dtype is torch.bfloat16
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(),
+    reason="MPS is required for this Inductor regression test.",
+)
+def test_compiled_mps_decode_preserves_large_indexed_cache():
+    attention = CausalMultiHeadAttention(
+        AttentionLayerConfig(
+            context_length=4109,
+            embedding_dimension=8,
+            num_heads=2,
+            attention_type=CausalMultiHeadAttention,
+        )
+    ).eval()
+    attention.to("mps")
+    kv_cache = KVCache(capacity=4109)
+    attention(
+        torch.randn(1, 13, 8, device="mps"),
+        attention_mask=torch.ones(1, 13, dtype=torch.bool, device="mps"),
+        kv_cache=kv_cache,
+        cache_position=torch.arange(13, device="mps"),
+    )
+    retained_key = kv_cache.k[:, :, :13].clone()
+    retained_value = kv_cache.v[:, :, :13].clone()
+    compiled_attention = torch.compile(attention, fullgraph=True)
+
+    output = compiled_attention(
+        torch.randn(1, 1, 8, device="mps"),
+        attention_mask=torch.ones(1, 1, dtype=torch.bool, device="mps"),
+        kv_cache=kv_cache,
+        cache_position=torch.tensor([13], device="mps"),
+    )
+    torch.mps.synchronize()
+
+    assert output.shape == (1, 1, 8)
+    assert torch.equal(kv_cache.k[:, :, :13], retained_key)
+    assert torch.equal(kv_cache.v[:, :, :13], retained_value)

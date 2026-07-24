@@ -62,7 +62,11 @@ def test_grouped_query_attention_and_kv_cache_use_explicit_head_dimension():
         value_heads,
     )
     cache = KVCache(capacity=4)
-    output = attention(inputs, kv_cache=cache)
+    output = attention(
+        inputs,
+        kv_cache=cache,
+        cache_position=torch.arange(inputs.size(1)),
+    )
 
     assert query_heads.shape == (2, 4, 4, 3)
     assert key_heads.shape == (2, 2, 4, 3)

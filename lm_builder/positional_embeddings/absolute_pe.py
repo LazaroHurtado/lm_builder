@@ -36,7 +36,7 @@ class AbsolutePE(nn.Module):
 
     def forward(self, x: torch.Tensor, position_ids=None):
         _, T, C = x.size()
-        
+
         if position_ids is None:
             positional_embedding = self.weight[None, :T, :C]
         else:

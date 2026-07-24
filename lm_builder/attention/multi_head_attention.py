@@ -97,6 +97,7 @@ class MultiHeadAttention(Attention):
         query_length,
         key_length,
         device,
+        _attention_positions=None,
     ):
         return torch.ones(
             1,
@@ -110,33 +111,31 @@ class MultiHeadAttention(Attention):
     def _build_explicit_attention_mask(
         self,
         attention_mask,
-        batch_size,
-        query_length,
-        key_length,
+        query,
+        key,
+        attention_positions=None,
     ):
         # Combine structural and padding constraints into one boolean mask.
         base_mask = self._build_base_attention_mask(
-            query_length,
-            key_length,
-            self.qkv_proj.weight.device,
+            query.size(2),
+            key.size(2),
+            query.device,
+            attention_positions,
         )
         if attention_mask is None:
             return base_mask
 
         if (
             attention_mask.ndim != 2
-            or attention_mask.size(0) != batch_size
-            or attention_mask.size(1) < key_length
+            or attention_mask.size(0) != query.size(0)
+            or attention_mask.size(1) < key.size(2)
         ):
             raise ValueError(
                 "Attention mask must contain the complete key sequence shape."
             )
 
-        key_padding_mask = attention_mask[:, -key_length:].to(
-            device=base_mask.device,
-            dtype=torch.bool,
-        )[:, None, None, :]
-        combined_mask = base_mask & key_padding_mask
+        key_padding_mask = attention_mask[:, -key.size(2) :].to(base_mask.device).ne(0)
+        combined_mask = base_mask & key_padding_mask[:, None, None, :]
 
         # Left-padded query rows can have no valid keys. Their outputs are ignored,
         # but keeping a causal row prevents all-masked softmax rows from producing NaNs.
@@ -147,11 +146,15 @@ class MultiHeadAttention(Attention):
         )
 
     def _prepare_attention_mask(
-        self, attention_mask, key_length, query_length, batch_size
+        self,
+        attention_mask,
+        query,
+        key,
+        attention_positions=None,
     ):
         # Prefer SDPA's implicit causal mode when no explicit mask is needed.
         is_fully_causal = (
-            self.is_causal and self.window_size is None and query_length == key_length
+            self.is_causal and self.window_size is None and query.size(2) == key.size(2)
         )
         use_causal_mask = (
             self.has_flash_attn and attention_mask is None and is_fully_causal
@@ -165,9 +168,9 @@ class MultiHeadAttention(Attention):
         ):
             combined_attention_mask = self._build_explicit_attention_mask(
                 attention_mask,
-                batch_size,
-                query_length,
-                key_length,
+                query,
+                key,
+                attention_positions,
             )
         return combined_attention_mask, use_causal_mask
 
@@ -201,12 +204,15 @@ class MultiHeadAttention(Attention):
         attention_mask=None,
         qk_position_data=None,
         kv_cache: KVCache = None,
+        cache_position=None,
     ):
         if kv_cache is not None:
             assert (
                 not self.training
             ), "KV caching requires attention to be in eval mode."
             assert self.supports_kv_cache, "KV caching requires causal attention."
+            if cache_position is None:
+                raise ValueError("Cache positions are required when using a KV cache.")
 
         # batch size, sequence length, embedding dimensionality.
         B, T, _ = x.size()
@@ -226,13 +232,24 @@ class MultiHeadAttention(Attention):
         if self.qk_positional_embedding is not None:
             q, k = self.qk_positional_embedding.apply_qk(q, k, qk_position_data)
 
+        attention_positions = None
         if kv_cache is not None:
-            k, v = kv_cache.update(k, v)
+            k, v, key_mask, key_positions = kv_cache.update(
+                k,
+                v,
+                cache_position,
+                attention_mask,
+            )
+            attention_mask = key_mask
+            attention_positions = (cache_position, key_positions)
 
         k, v = self._repeat_kv_heads(k, v)
 
         combined_attention_mask, use_causal_mask = self._prepare_attention_mask(
-            attention_mask, key_length=k.size(2), query_length=T, batch_size=B
+            attention_mask,
+            q,
+            k,
+            attention_positions,
         )
         if self.has_flash_attn:
             attn = F.scaled_dot_product_attention(  # pylint: disable=not-callable

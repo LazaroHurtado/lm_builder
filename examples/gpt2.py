@@ -87,6 +87,7 @@ def main():
         print("Building GPT-2 state dict...")
         GPT2Loader.build_state_dict()
 
+    device = get_device()
     with torch.no_grad():
         gpt2_xl = GPT2Loader.build_model("meta")
         state_dict = torch.load(GPT2Loader.WEIGHTS_FILE, map_location="cpu")
@@ -95,7 +96,8 @@ def main():
         del state_dict
         gc.collect()
 
-        gpt2_xl.to(get_device())
+        gpt2_xl.to(device)
+        gpt2_xl = torch.compile(gpt2_xl, fullgraph=True)
         tokenizer = AutoTokenizer.from_pretrained(
             GPT2Loader.HF_MODEL_NAME, clean_up_tokenization_spaces=True
         )
@@ -106,7 +108,7 @@ def main():
             "temperature": 0.7,
             "stream": True,
             "debug": True,
-            "device": get_device(),
+            "device": device,
         }
 
         print("Generating with KV cache:")

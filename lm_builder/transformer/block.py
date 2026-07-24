@@ -31,12 +31,14 @@ class Block(nn.Module):
         attention_mask=None,
         qk_position_data=None,
         kv_cache=None,
+        cache_position=None,
     ):
         x = x + self.attn(
             self.attn_norm(x),
             attention_mask=attention_mask,
             qk_position_data=qk_position_data,
             kv_cache=kv_cache,
+            cache_position=cache_position,
         )
         ffn_out, routing_loss = self.ffn(
             self.ffn_norm(x),

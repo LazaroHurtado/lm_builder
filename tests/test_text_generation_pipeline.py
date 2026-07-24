@@ -65,6 +65,8 @@ class RecordingModel(nn.Module):
         self.context_length = config.context_length
         self.blocks = nn.ModuleList()
         self.attention_masks = []
+        self.position_ids = []
+        self.cache_positions = []
 
     def forward(
         self,
@@ -72,10 +74,15 @@ class RecordingModel(nn.Module):
         targets=None,
         attention_mask=None,
         position_ids=None,
+        cache_position=None,
         *,
         _kv_caches=None,
     ):
         self.attention_masks.append(attention_mask.clone())
+        self.position_ids.append(position_ids.clone())
+        self.cache_positions.append(
+            None if cache_position is None else cache_position.clone()
+        )
         logits = torch.zeros(
             (*x.shape, self.config.vocab_size),
             device=x.device,
@@ -99,6 +106,7 @@ class ScriptedModel(nn.Module):
         targets=None,
         attention_mask=None,
         position_ids=None,
+        cache_position=None,
         *,
         _kv_caches=None,
     ):
@@ -155,6 +163,69 @@ def test_prompt_passes_and_extends_tokenizer_attention_mask():
         model.attention_masks[1],
         torch.tensor([[0, 1, 1], [1, 1, 1]]),
     )
+    assert torch.equal(
+        model.position_ids[0],
+        torch.tensor([[0, 0, 0], [0, 1, 2]]),
+    )
+    assert torch.equal(
+        model.position_ids[1],
+        torch.tensor([[0, 0, 1], [0, 1, 2]]),
+    )
+
+
+def test_cached_generation_passes_incremental_position_ids():
+    model = RecordingModel(build_config(context_length=8)).eval()
+    pipeline = TextGenerationPipeline(model, tokenizer=None)
+
+    list(
+        pipeline.generate(
+            torch.tensor([[0, 2, 3], [4, 5, 6]]),
+            attention_mask=torch.tensor([[0, 1, 1], [1, 1, 1]]),
+            max_new_tokens=3,
+            temperature=0,
+        )
+    )
+
+    assert len(model.position_ids) == 3
+    assert torch.equal(
+        model.position_ids[0],
+        torch.tensor([[0, 0, 1], [0, 1, 2]]),
+    )
+    assert torch.equal(
+        model.position_ids[1],
+        torch.tensor([[2], [3]]),
+    )
+    assert torch.equal(
+        model.position_ids[2],
+        torch.tensor([[3], [4]]),
+    )
+    assert torch.equal(model.cache_positions[0], torch.tensor([0, 1, 2]))
+    assert torch.equal(model.cache_positions[1], torch.tensor([3]))
+    assert torch.equal(model.cache_positions[2], torch.tensor([4]))
+
+
+def test_top_p_sampling_keeps_the_token_that_crosses_the_threshold(monkeypatch):
+    sampled_probabilities = None
+
+    def sample(probabilities, num_samples):
+        nonlocal sampled_probabilities
+        assert num_samples == 1
+        sampled_probabilities = probabilities
+        return torch.tensor([[1]])
+
+    monkeypatch.setattr(torch, "multinomial", sample)
+
+    token = TextGenerationPipeline._sample_next_token(
+        logits=torch.tensor([[4.0, 3.0, 2.0]]),
+        temperature=1.0,
+        top_k=3,
+        top_p=0.7,
+    )
+
+    assert token.item() == 1
+    assert sampled_probabilities[0, 0] > 0
+    assert sampled_probabilities[0, 1] > 0
+    assert sampled_probabilities[0, 2] == 0
 
 
 def test_generate_stops_after_tokenizer_eos():

@@ -126,13 +126,21 @@ a `Transformer` and tokenizer while leaving model parameters, device placement,
 and compilation on the transformer itself. The prompt is evaluated once, then
 only the newest token is evaluated. Each layer allocates
 `min(context_length, prompt_length + max_new_tokens)` cache entries instead of
-always allocating the full context window. The model must be in evaluation mode.
+always allocating the full context window. Cache tensors and their key mask keep
+that fixed shape. New entries are written directly to
+`cache_position % capacity`; causal masks use logical positions instead of
+depending on the physical slot order. This avoids copying the existing cache on
+every token and lets a compiled model reuse one single-token decode graph as the
+cache fills and rolls over. The model must be in evaluation mode.
 Set `use_cache=False` to use full-sequence recomputation instead:
 
 ```python
+import torch
+
 from lm_builder import TextGenerationPipeline
 
-pipeline = TextGenerationPipeline(model, tokenizer)
+model.eval()
+pipeline = TextGenerationPipeline(torch.compile(model), tokenizer)
 output = pipeline.prompt("Hello", use_cache=False)
 ```
 

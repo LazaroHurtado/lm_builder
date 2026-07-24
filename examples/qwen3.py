@@ -70,6 +70,7 @@ def main():
         print("Building Qwen3 state dict...")
         loader.build_state_dict()
 
+    device = get_device()
     with torch.no_grad():
         qwen3 = loader.build_model("meta")
         state_dict = torch.load(loader.WEIGHTS_FILE, map_location="cpu")
@@ -83,7 +84,8 @@ def main():
         ]
         generation_config = GenerationConfig.from_pretrained(loader.HF_MODEL_NAME)
 
-        qwen3.to(get_device())
+        qwen3.to(device)
+        qwen3 = torch.compile(qwen3, fullgraph=True)
         tokenizer = AutoTokenizer.from_pretrained(loader.HF_MODEL_NAME)
         pipeline = TextGenerationPipeline(qwen3, tokenizer)
         pipeline.prompt(
@@ -91,11 +93,12 @@ def main():
             max_new_tokens=4096,
             temperature=generation_config.temperature,
             top_k=generation_config.top_k,
+            top_p=generation_config.top_p,
             eos_token_id=generation_config.eos_token_id,
             apply_chat_template=True,
             stream=True,
             debug=True,
-            device=get_device(),
+            device=device,
             use_cache=True,
         )
 

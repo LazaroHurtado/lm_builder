@@ -73,6 +73,15 @@ def build_model(
     return Transformer(config).eval()
 
 
+def build_position_ids(input_ids, attention_mask=None):
+    if attention_mask is None:
+        return torch.arange(input_ids.size(1)).expand(input_ids.size(0), -1)
+
+    position_ids = attention_mask.long().cumsum(dim=-1) - 1
+    position_ids.masked_fill_(~attention_mask.bool(), 0)
+    return position_ids
+
+
 @pytest.mark.parametrize(
     "attention_type",
     [
@@ -107,6 +116,7 @@ def test_cached_decode_matches_full_forward(
     attention_mask = (
         torch.tensor([[0, 1, 1, 1], [1, 1, 1, 1]]) if with_attention_mask else None
     )
+    position_ids = build_position_ids(input_ids, attention_mask)
     kv_caches = [KVCache(capacity=model.context_length) for _ in model.blocks]
 
     with torch.inference_mode():
@@ -116,11 +126,15 @@ def test_cached_decode_matches_full_forward(
             attention_mask=(
                 attention_mask[:, :-1] if attention_mask is not None else None
             ),
+            position_ids=position_ids[:, :-1],
+            cache_position=torch.arange(input_ids.size(1) - 1),
             _kv_caches=kv_caches,
         )
         cached_logits, _, _ = model(
             input_ids[:, -1:],
             attention_mask=attention_mask,
+            position_ids=position_ids[:, -1:],
+            cache_position=torch.tensor([input_ids.size(1) - 1]),
             _kv_caches=kv_caches,
         )
 
@@ -135,14 +149,17 @@ def test_cached_decode_matches_full_forward(
 def test_cached_rotary_decode_preserves_key_value_dtype_under_autocast():
     model = build_model()
     kv_caches = [KVCache(capacity=model.context_length) for _ in model.blocks]
-
     with torch.inference_mode(), torch.autocast("cpu", dtype=torch.bfloat16):
         model(
             torch.tensor([[1, 2, 3]]),
+            position_ids=torch.tensor([[0, 1, 2]]),
+            cache_position=torch.tensor([0, 1, 2]),
             _kv_caches=kv_caches,
         )
         model(
             torch.tensor([[4]]),
+            position_ids=torch.tensor([[3]]),
+            cache_position=torch.tensor([3]),
             _kv_caches=kv_caches,
         )
 
@@ -182,6 +199,37 @@ def test_generate_prefills_once_then_decodes_single_tokens():
         assert projected_sequence_lengths == [3, 4, 5]
     finally:
         hook.remove()
+
+
+def test_compiled_generation_reuses_one_decode_graph_across_cache_overflow():
+    model = build_model(
+        context_length=4,
+        num_layers=1,
+    )
+    graph_count = 0
+
+    def counting_backend(graph_module, _example_inputs):
+        nonlocal graph_count
+        graph_count += 1
+        return graph_module.forward
+
+    compiled_model = torch.compile(
+        model,
+        backend=counting_backend,
+        fullgraph=True,
+    )
+    pipeline = TextGenerationPipeline(compiled_model, tokenizer=None)
+
+    tokens = list(
+        pipeline.generate(
+            torch.tensor([[1, 2, 3]]),
+            max_new_tokens=5,
+            temperature=0,
+        )
+    )
+
+    assert len(tokens) == 5
+    assert graph_count == 2
 
 
 @pytest.mark.parametrize(
@@ -485,6 +533,8 @@ def test_grouped_query_cache_keeps_native_kv_heads():
     with torch.inference_mode():
         model(
             torch.tensor([[1, 2, 3]]),
+            position_ids=torch.tensor([[0, 1, 2]]),
+            cache_position=torch.tensor([0, 1, 2]),
             _kv_caches=kv_caches,
         )
 

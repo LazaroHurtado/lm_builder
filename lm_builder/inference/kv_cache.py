@@ -1,3 +1,5 @@
+import torch
+
 from ..utils import is_positive_integer
 
 
@@ -6,101 +8,61 @@ class KVCache:
         if not is_positive_integer(capacity):
             raise ValueError("capacity must be a positive integer.")
 
+        self.capacity = capacity
         self.k = None
         self.v = None
-        self.capacity = capacity
-        self._sequence_length = 0
-        self._tokens_seen = 0
-
-    @property
-    def sequence_length(self):
-        return self._sequence_length
-
-    @property
-    def tokens_seen(self):
-        return self._tokens_seen
-
-    def __len__(self):
-        return self.sequence_length
+        self.key_mask = None
 
     def reset(self):
-        self._sequence_length = 0
-        self._tokens_seen = 0
+        if self.key_mask is not None:
+            # Invalid entries are ignored, so the large K/V tensors need not be cleared.
+            self.key_mask.zero_()
 
-    def _storage_matches(self, storage, tensor):
-        return (
-            storage is not None
-            and storage.shape
-            == (
-                tensor.size(0),
-                tensor.size(1),
-                self.capacity,
-                tensor.size(3),
-            )
-            and storage.device == tensor.device
-            and storage.dtype == tensor.dtype
-        )
-
-    def _ensure_storage(self, k, v):
-        if self._storage_matches(self.k, k) and self._storage_matches(self.v, v):
+    def _initialize(self, k, v):
+        if self.k is not None:
             return
 
-        if self.sequence_length:
-            raise ValueError(
-                "Cached key/value shape, device, or dtype changed before reset."
-            )
-
-        self.k = k.new_empty(
+        shape = (k.size(0), k.size(1), self.capacity, k.size(3))
+        self.k = k.new_zeros(shape)
+        self.v = v.new_zeros(shape)
+        self.key_mask = torch.zeros(
             k.size(0),
-            k.size(1),
             self.capacity,
-            k.size(3),
+            dtype=torch.bool,
+            device=k.device,
         )
-        self.v = v.new_empty(
-            v.size(0),
-            v.size(1),
+
+    def update(self, k, v, cache_position, attention_mask=None):
+        if k.ndim != 4 or k.shape != v.shape:
+            raise ValueError("Cached keys and values must have equal 4D shapes.")
+
+        num_tokens = k.size(2)
+        if not 0 < num_tokens <= self.capacity:
+            raise ValueError("Cached sequence length must be between 1 and capacity.")
+        if cache_position.ndim != 1 or cache_position.numel() != num_tokens:
+            raise ValueError("Cache positions must match the cached sequence length.")
+
+        self._initialize(k, v)
+        cache_position = cache_position.to(device=k.device, dtype=torch.long)
+        slots = cache_position.remainder(self.capacity)
+        if attention_mask is None:
+            attention_mask = torch.ones(
+                k.size(0),
+                num_tokens,
+                dtype=torch.bool,
+                device=k.device,
+            )
+        else:
+            attention_mask = attention_mask[:, -num_tokens:].to(k.device).ne(0)
+
+        self.k.index_copy_(2, slots, k)
+        self.v.index_copy_(2, slots, v)
+        self.key_mask.index_copy_(1, slots, attention_mask)
+
+        all_slots = torch.arange(self.capacity, device=k.device)
+        latest_position = cache_position[-1]
+        key_positions = latest_position - torch.remainder(
+            latest_position - all_slots,
             self.capacity,
-            v.size(3),
         )
-
-    def _shift_left(self, positions):
-        retained_length = self.sequence_length - positions
-        if retained_length:
-            self.k[:, :, :retained_length].copy_(
-                self.k[:, :, positions : self.sequence_length].clone()
-            )
-            self.v[:, :, :retained_length].copy_(
-                self.v[:, :, positions : self.sequence_length].clone()
-            )
-        return retained_length
-
-    def update(self, k, v):
-        if k.ndim != 4 or v.ndim != 4:
-            raise ValueError("Cached keys and values must be four-dimensional.")
-        if k.shape[:3] != v.shape[:3]:
-            raise ValueError(
-                "Cached keys and values must share batch, head, and sequence shapes."
-            )
-        if k.device != v.device or k.dtype != v.dtype:
-            raise ValueError("Cached keys and values must share device and dtype.")
-
-        incoming_length = k.size(2)
-        next_sequence_length = self.sequence_length + incoming_length
-        if next_sequence_length > self.capacity and incoming_length != 1:
-            raise ValueError(
-                "Rolling KV cache overflow only supports single-token updates."
-            )
-
-        self._ensure_storage(k, v)
-        overflow = max(0, next_sequence_length - self.capacity)
-        start = self._shift_left(overflow) if overflow else self.sequence_length
-        end = start + incoming_length
-        self.k[:, :, start:end].copy_(k)
-        self.v[:, :, start:end].copy_(v)
-        self._sequence_length = min(next_sequence_length, self.capacity)
-        self._tokens_seen += incoming_length
-
-        return (
-            self.k[:, :, : self.sequence_length],
-            self.v[:, :, : self.sequence_length],
-        )
+        return self.k, self.v, self.key_mask, key_positions

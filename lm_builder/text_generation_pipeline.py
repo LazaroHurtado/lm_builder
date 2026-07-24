@@ -17,45 +17,110 @@ class TextGenerationPipeline:
         full_sequence,
         full_attention_mask,
         kv_caches,
+        has_cached_tokens,
     ):
-        model_input = full_sequence
-        model_attention_mask = full_attention_mask
-
-        cache_is_populated = kv_caches is not None and kv_caches[0].sequence_length > 0
-        # Absolute input embeddings cannot be reindexed without recomputing the window.
-        # For example, if our context length is 4 tokens; A, B, C, D
-        # then they will be assigned position ids 0, 1, 2, 3 respectively.
-        # Then, when we go to compute the new next token E we are forced to re-use
-        # B, C, D with positions ids 1, 2, 3. So to be correct E must take position id 4.
-        # The problem is that our positional embedding table is only of size context_length,
-        # and id 4 does not exist when our context length is 4, only ids 0, 1, 2, 3 exist.
-        # For this reason we cannot roll the kv cache once it exceeds the context_length.
-        can_roll_cache = (
-            kv_caches is not None and self.model.config.positional_embedding is None
+        sequence_length = full_sequence.size(1)
+        decode_from_cache = has_cached_tokens and (
+            self.model.config.positional_embedding is None
+            or sequence_length <= self.model.context_length
         )
 
-        if cache_is_populated and (
-            can_roll_cache or full_sequence.shape[-1] <= self.model.context_length
-        ):
+        if decode_from_cache:
             model_input = full_sequence[:, -1:]
-        elif full_sequence.shape[-1] > self.model.context_length:
+        else:
             model_input = full_sequence[:, -self.model.context_length :]
-            if full_attention_mask is not None and not can_roll_cache:
-                model_attention_mask = full_attention_mask[
-                    :, -self.model.context_length :
-                ]
 
-            if kv_caches is not None:
-                for kv_cache in kv_caches:
-                    kv_cache.reset()
+        reindex_positions = not decode_from_cache and (
+            sequence_length > self.model.context_length
+        )
+        if reindex_positions and kv_caches is not None:
+            # Absolute embeddings require recomputing retained tokens at new positions.
+            for kv_cache in kv_caches:
+                kv_cache.reset()
 
-        return model_input, model_attention_mask
+        model_attention_mask = full_attention_mask
+        if model_attention_mask is not None:
+            model_attention_mask = model_attention_mask[:, -model_input.size(1) :]
+
+        position_ids = self._prepare_position_ids(
+            full_sequence,
+            full_attention_mask,
+            model_input.size(1),
+            reindex_positions,
+        )
+        cache_position = None
+        if kv_caches is not None:
+            end = model_input.size(1) if reindex_positions else sequence_length
+            cache_position = torch.arange(
+                end - model_input.size(1),
+                end,
+                dtype=torch.long,
+                device=full_sequence.device,
+            )
+        return model_input, model_attention_mask, position_ids, cache_position
+
+    @staticmethod
+    def _sample_next_token(
+        logits,
+        temperature,
+        top_k,
+        top_p,
+    ):
+        if temperature == 0:
+            return torch.argmax(logits, dim=-1, keepdim=True)
+
+        logits = logits / temperature
+        if top_k is None and top_p is None:
+            return torch.multinomial(F.softmax(logits, dim=-1), num_samples=1)
+
+        if top_k is None:
+            candidate_logits, candidate_ids = logits.sort(dim=-1, descending=True)
+        else:
+            candidate_logits, candidate_ids = torch.topk(
+                logits,
+                min(top_k, logits.size(-1)),
+                dim=-1,
+            )
+
+        probabilities = F.softmax(candidate_logits, dim=-1)
+        if top_p is not None:
+            remove = probabilities.cumsum(dim=-1) - probabilities >= top_p
+            probabilities.masked_fill_(remove, 0)
+
+        sampled_index = torch.multinomial(probabilities, num_samples=1)
+        return candidate_ids.gather(dim=-1, index=sampled_index)
+
+    @staticmethod
+    def _prepare_position_ids(
+        full_sequence,
+        full_attention_mask,
+        input_length,
+        reindex_positions,
+    ):
+        if full_attention_mask is not None:
+            position_mask = (
+                full_attention_mask[:, -input_length:]
+                if reindex_positions
+                else full_attention_mask
+            )
+            position_ids = position_mask.long().cumsum(dim=-1) - 1
+            position_ids.masked_fill_(~position_mask.bool(), 0)
+            return position_ids[:, -input_length:]
+
+        start = 0 if reindex_positions else full_sequence.size(1) - input_length
+        return torch.arange(
+            start,
+            start + input_length,
+            dtype=torch.long,
+            device=full_sequence.device,
+        ).expand(full_sequence.size(0), -1)
 
     @torch.inference_mode()
     def generate(
         self,
         input_ids,
         top_k=None,
+        top_p=None,
         max_new_tokens=20,
         temperature=1.0,
         attention_mask=None,
@@ -64,6 +129,10 @@ class TextGenerationPipeline:
         **kwargs,
     ):
         assert temperature >= 0, "Temperature must be non-negative"
+        if top_p is not None and not 0 < top_p <= 1:
+            raise ValueError("top_p must be between 0 and 1.")
+        if top_k is not None and top_k <= 0:
+            raise ValueError("top_k must be positive.")
         full_sequence = input_ids
         full_attention_mask = attention_mask
         if eos_token_id is None and self.tokenizer is not None:
@@ -92,31 +161,29 @@ class TextGenerationPipeline:
             )
             kv_caches = [KVCache(capacity=cache_capacity) for _ in self.model.blocks]
 
-        for _ in range(max_new_tokens):
-            model_input, model_attention_mask = self._prepare_generation_inputs(
-                full_sequence,
-                full_attention_mask,
-                kv_caches,
+        for generation_step in range(max_new_tokens):
+            model_input, model_attention_mask, position_ids, cache_position = (
+                self._prepare_generation_inputs(
+                    full_sequence,
+                    full_attention_mask,
+                    kv_caches,
+                    kv_caches is not None and generation_step > 0,
+                )
             )
-
             logits, _, _ = self.model(
                 model_input,
                 attention_mask=model_attention_mask,
+                position_ids=position_ids,
+                cache_position=cache_position,
                 _kv_caches=kv_caches,
             )
             logits = logits[:, -1, :]
-
-            if temperature > 0:
-                logits = logits / temperature
-
-                if top_k is not None:
-                    v, _ = torch.topk(logits, min(top_k, logits.size(-1)), dim=-1)
-                    logits[logits < v[:, [-1]]] = float("-inf")
-
-                probs = F.softmax(logits, dim=-1)
-                next_id = torch.multinomial(probs, num_samples=1)
-            else:
-                next_id = torch.argmax(logits, dim=-1, keepdim=True)
+            next_id = self._sample_next_token(
+                logits,
+                temperature,
+                top_k,
+                top_p,
+            )
 
             if eos_token_ids is not None:
                 next_id = torch.where(
