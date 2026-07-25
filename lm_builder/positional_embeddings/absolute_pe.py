@@ -1,6 +1,8 @@
 import torch
 from torch import nn
 
+from ..utils import select_positional_embedding
+
 
 class AbsolutePE(nn.Module):
     def __init__(self, context_length: int, embedding_dim: int, base: float):
@@ -35,12 +37,6 @@ class AbsolutePE(nn.Module):
         self.register_buffer("weight", weight, persistent=False)
 
     def forward(self, x: torch.Tensor, position_ids=None):
-        _, T, C = x.size()
-
-        if position_ids is None:
-            positional_embedding = self.weight[None, :T, :C]
-        else:
-            position_ids = position_ids.to(device=x.device, dtype=torch.long)
-            positional_embedding = self.weight[position_ids, :C]
+        positional_embedding = select_positional_embedding(self.weight, x, position_ids)
 
         return x + positional_embedding.to(device=x.device, dtype=x.dtype)

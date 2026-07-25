@@ -14,6 +14,16 @@ def load_yml(file):
         return yaml.safe_load(config_file)
 
 
+def select_positional_embedding(weight, x, position_ids=None):
+    _, seq_len, embedding_dim = x.size()
+
+    if position_ids is None:
+        return weight[None, :seq_len, :embedding_dim]
+
+    position_ids = position_ids.to(device=weight.device, dtype=torch.long)
+    return weight[position_ids, :embedding_dim]
+
+
 def module_has_attr(config, key, primary_module, fallback_module=None):
     if key in config and isinstance(config[key], str):
         if hasattr(primary_module, config[key]):

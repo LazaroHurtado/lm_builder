@@ -31,16 +31,16 @@ class Transformer(nn.Module):
         ]
 
         self.wte = config.token_embedding(config.vocab_size, self.embedding_dim)
-        self.wpe = None
+        self.wpe = (
+            config.positional_embedding(
+                self.context_length, self.embedding_dim, config.inv_freq
+            )
+            if config.positional_embedding is not None
+            else None
+        )
         self.blocks = nn.ModuleList(blocks)
         self.dropout = nn.Dropout(config.dropout)
         self.norm = config.norm.build(self.embedding_dim)
-
-        if config.positional_embedding is not None:
-            positional_embedding = config.positional_embedding(
-                self.context_length, self.embedding_dim, config.inv_freq
-            )
-            self.wpe = positional_embedding
 
         self.lm_head = nn.Linear(
             self.embedding_dim, config.vocab_size, bias=config.bias
