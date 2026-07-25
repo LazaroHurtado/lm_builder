@@ -20,8 +20,6 @@ class FeedForward(nn.Module):
         self.gate_proj = nn.Linear(self.in_dim, self.hidden_dim, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
 
-        self.config = config
-
     def forward(self, x, *args, **kwargs):  # pylint: disable=unused-argument
         out1 = self.up_proj(x)
         out2 = self.gate_proj(x)

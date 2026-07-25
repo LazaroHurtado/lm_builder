@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Type
 
@@ -21,12 +20,6 @@ class PositionalEmbeddingConfig:
             **self.kwargs,
         )
         return positional_embedding
-
-    def clone(self) -> PositionalEmbeddingConfig:
-        return PositionalEmbeddingConfig(
-            positional_embedding_type=self.positional_embedding_type,
-            kwargs=dict(self.kwargs),
-        )
 
     @staticmethod
     def build_config(config: dict) -> Optional[PositionalEmbeddingConfig]:

@@ -17,8 +17,6 @@ class ClassicFeedForward(nn.Module):
         self.down_proj = nn.Linear(self.hidden_dim, self.in_dim)
         self.dropout = nn.Dropout(config.dropout)
 
-        self.config = config
-
     def forward(self, x, *args, **kwargs):  # pylint: disable=unused-argument
         x = self.up_proj(x)
         x = self.activation_fn(x)

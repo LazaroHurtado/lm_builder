@@ -10,11 +10,6 @@ from ..positional_embeddings import PositionalEmbeddingConfig
 from ..utils import is_positive_integer, load_yml, module_has_attr
 
 
-def _filter_config_fields(config, config_type):
-    valid_fields = {config_field.name for config_field in fields(config_type)}
-    return {key: value for key, value in config.items() if key in valid_fields}
-
-
 def _resolve_ratio(layers, ratio):
     if ratio is None:
         if len(layers) > 1:
@@ -115,7 +110,10 @@ class AttentionLayerConfig:
         if config.get("qk_norm") is not None:
             config["qk_norm"] = NormalizerConfig.build_config(config["qk_norm"])
 
-        config = _filter_config_fields(config, AttentionLayerConfig)
+        valid_fields = {
+            config_field.name for config_field in fields(AttentionLayerConfig)
+        }
+        config = {key: value for key, value in config.items() if key in valid_fields}
 
         return AttentionLayerConfig(**config)
 

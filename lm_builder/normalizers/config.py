@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, Type
 
 from torch import nn
@@ -17,10 +17,7 @@ class NormalizerConfig:
         return self.normalizer_type(dimension, **self.kwargs)
 
     def clone(self) -> NormalizerConfig:
-        return NormalizerConfig(
-            normalizer_type=self.normalizer_type,
-            kwargs=dict(self.kwargs),
-        )
+        return replace(self, kwargs=dict(self.kwargs))
 
     @staticmethod
     def build_config(config=None) -> NormalizerConfig:

@@ -5,10 +5,8 @@ import torch
 import yaml
 
 
-def is_positive_integer(value, greater_than=0):
-    return (
-        isinstance(value, int) and not isinstance(value, bool) and value > greater_than
-    )
+def is_positive_integer(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
 def load_yml(file):

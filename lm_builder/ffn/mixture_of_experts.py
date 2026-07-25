@@ -140,34 +140,26 @@ class GroupedExperts(nn.Module):
 
 class MixtureOfExperts(nn.Module):
 
-    @staticmethod
-    def validate_config(config: FeedForwardConfig):
+    def __init__(self, config: FeedForwardConfig):
+        super().__init__()
         if not is_positive_integer(config.num_experts):
             raise ValueError(
                 "num_experts must be a positive integer for MixtureOfExperts."
             )
-        if not is_positive_integer(config.top_k):
+        if not is_positive_integer(config.top_k) or config.top_k > config.num_experts:
             raise ValueError(
                 "top_k must be an integer between 1 and num_experts "
                 "for MixtureOfExperts."
             )
-        if config.top_k > config.num_experts:
-            raise ValueError(
-                "top_k must be an integer between 1 and num_experts "
-                "for MixtureOfExperts."
-            )
-        if not is_positive_integer(
-            config.num_shared_experts,
-            greater_than=-1,
+        if (
+            not isinstance(config.num_shared_experts, int)
+            or isinstance(config.num_shared_experts, bool)
+            or config.num_shared_experts < 0
         ):
             raise ValueError(
                 "num_shared_experts must be a non-negative integer "
                 "for MixtureOfExperts."
             )
-
-    def __init__(self, config: FeedForwardConfig):
-        super().__init__()
-        self.validate_config(config)
 
         self.embedding_dim = config.embedding_dimension
         self.intermediate_dim = config.intermediate_dimension
@@ -188,8 +180,6 @@ class MixtureOfExperts(nn.Module):
                 ),
             )
             self.shared_expert = FeedForward(shared_expert_config)
-
-        self.config = config
 
     def _get_routing_loss(
         self,

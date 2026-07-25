@@ -39,19 +39,6 @@ def test_build_returns_independent_positional_embeddings():
     assert first is not second
 
 
-def test_clone_copies_constructor_kwargs():
-    config = PositionalEmbeddingConfig(
-        positional_embedding_type=RotaryPE,
-        kwargs={"base": 1_000_000.0},
-    )
-
-    clone = config.clone()
-    clone.kwargs["base"] = 10_000.0
-
-    assert clone is not config
-    assert config.kwargs == {"base": 1_000_000.0}
-
-
 def test_build_config_requires_mapping():
     with pytest.raises(TypeError, match="must be a mapping"):
         PositionalEmbeddingConfig.build_config("RotaryPE")

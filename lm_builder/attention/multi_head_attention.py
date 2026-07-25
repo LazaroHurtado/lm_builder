@@ -24,7 +24,6 @@ class MultiHeadAttention(nn.Module):
         ):
             raise ValueError(f"{type(self).__name__} does not support window_size.")
 
-        self.context_len = config.context_length
         self.embedding_dim = config.embedding_dimension
         self.num_heads = config.num_heads
         self.window_size = config.window_size
