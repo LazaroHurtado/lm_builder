@@ -9,6 +9,7 @@ from lm_builder.attention import (
     MultiHeadAttention,
 )
 from lm_builder.normalizers import RMSNorm
+from lm_builder.utils import load_yml
 from lm_builder.positional_embeddings import (
     PositionalEmbeddingConfig,
     RotaryPE,
@@ -411,7 +412,7 @@ def test_qk_positional_embedding_requires_uniform_head_dimension():
         )
 
 
-def test_from_yml_returns_resolved_attention_config(tmp_path):
+def test_build_config_returns_resolved_attention_config(tmp_path):
     config_path = tmp_path / "model.yml"
     config_path.write_text(
         """
@@ -429,7 +430,13 @@ num_layers: 3
         encoding="utf-8",
     )
 
-    config = AttentionConfig.from_yml(config_path)
+    raw_config = load_yml(config_path)
+    config = AttentionConfig.build_config(
+        raw_config["attention_config"],
+        raw_config["num_layers"],
+        raw_config["context_length"],
+        raw_config["embedding_dimension"],
+    )
 
     assert config.qk_positional_embedding is None
     assert [layer.attention_type for layer in config.layers] == [
@@ -439,7 +446,7 @@ num_layers: 3
     ]
 
 
-def test_from_yml_clones_explicit_head_dimension_per_layer(tmp_path):
+def test_build_config_clones_explicit_head_dimension_per_layer(tmp_path):
     config_path = tmp_path / "model.yml"
     config_path.write_text(
         """
@@ -456,7 +463,13 @@ num_layers: 2
         encoding="utf-8",
     )
 
-    config = AttentionConfig.from_yml(config_path)
+    raw_config = load_yml(config_path)
+    config = AttentionConfig.build_config(
+        raw_config["attention_config"],
+        raw_config["num_layers"],
+        raw_config["context_length"],
+        raw_config["embedding_dimension"],
+    )
 
     assert [layer.head_dim for layer in config.layers] == [6, 6]
     assert config.layers[0] is not config.layers[1]

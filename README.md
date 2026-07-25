@@ -46,9 +46,10 @@ layers. `num_layers` must be divisible by the sum of `ratio`. A single entry
 does not require `ratio`. `TransformerConfig` injects the top-level
 `context_length` and `embedding_dimension` into every resolved attention config,
 and injects `embedding_dimension` into the feed-forward config. Loading this
-schema through `AttentionConfig.from_yml()` returns an `AttentionConfig` containing
-one `PositionalEmbeddingConfig` and an independent `AttentionLayerConfig` for
-every transformer layer. Positional embedding fields other than `type` are stored
+schema through `TransformerConfig.from_yml()` returns a `TransformerConfig` whose
+`attention_config` holds one `PositionalEmbeddingConfig` and an independent
+`AttentionLayerConfig` for every transformer layer. Positional embedding fields
+other than `type` are stored
 as constructor keyword arguments. `Transformer` uses that config to build one
 shared positional embedding instance for the model.
 

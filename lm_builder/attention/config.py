@@ -7,7 +7,7 @@ from torch import nn
 
 from ..normalizers import NormalizerConfig
 from ..positional_embeddings import PositionalEmbeddingConfig
-from ..utils import is_positive_integer, load_yml, module_has_attr
+from ..utils import is_positive_integer, module_has_attr
 
 
 def _resolve_ratio(layers, ratio):
@@ -62,7 +62,7 @@ class AttentionLayerConfig:
     context_length: int
     embedding_dimension: int
     num_heads: int
-    attention_type: Optional[Type[nn.Module]] = None
+    attention_type: Type[nn.Module]
     kv_heads: int = 1
     window_size: Optional[int] = None
     bias: bool = False
@@ -73,8 +73,6 @@ class AttentionLayerConfig:
     head_dim: Optional[int] = None
 
     def __post_init__(self):
-        if self.attention_type is None:
-            raise ValueError("attention_config.layers.type is required.")
         if self.window_size is not None and not is_positive_integer(self.window_size):
             raise ValueError("window_size must be a positive integer or None.")
 
@@ -140,19 +138,6 @@ class AttentionConfig:
                 "All attention layers must use the same head dimension when "
                 "qk_positional_embedding is configured."
             )
-
-    @staticmethod
-    def from_yml(file: str) -> AttentionConfig:
-        config = load_yml(file)
-        if not isinstance(config, dict):
-            raise TypeError("Model config must be a mapping.")
-
-        return AttentionConfig.build_config(
-            config["attention_config"],
-            config["num_layers"],
-            config["context_length"],
-            config["embedding_dimension"],
-        )
 
     @staticmethod
     def build_config(

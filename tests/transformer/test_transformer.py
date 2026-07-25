@@ -337,21 +337,10 @@ def test_tied_word_embeddings_remain_tied_after_assigned_state_load():
 
 
 def test_feed_forward_config_requires_type():
-    with pytest.raises(ValueError, match="ffn_config.type is required"):
-        TransformerConfig(
+    with pytest.raises(TypeError, match="ffn_type"):
+        FeedForwardConfig(
             embedding_dimension=8,
-            context_length=4,
-            attention_config=build_attention_configs(
-                context_length=4,
-                embedding_dimension=8,
-                num_heads=2,
-            ),
-            ffn_config=FeedForwardConfig(
-                embedding_dimension=8,
-                intermediate_dimension=16,
-            ),
-            vocab_size=10,
-            num_layers=1,
+            intermediate_dimension=16,
         )
 
 
