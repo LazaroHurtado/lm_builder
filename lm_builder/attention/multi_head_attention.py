@@ -1,17 +1,14 @@
 from __future__ import annotations
 
-import math
-
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 from ..inference import KVCache
-from .attention import Attention
 from .config import AttentionLayerConfig
 
 
-class MultiHeadAttention(Attention):
+class MultiHeadAttention(nn.Module):
     supports_kv_cache = False
     supports_window_size = False
     is_causal = False
@@ -56,8 +53,6 @@ class MultiHeadAttention(Attention):
 
         self.attn_dropout = nn.Dropout(config.attn_dropout)
         self.resid_dropout = nn.Dropout(config.resid_dropout)
-
-        self.has_flash_attn = hasattr(F, "scaled_dot_product_attention")
 
     def _get_num_kv_heads(self, config: AttentionLayerConfig):
         return config.num_heads
@@ -156,16 +151,10 @@ class MultiHeadAttention(Attention):
         is_fully_causal = (
             self.is_causal and self.window_size is None and query.size(2) == key.size(2)
         )
-        use_causal_mask = (
-            self.has_flash_attn and attention_mask is None and is_fully_causal
-        )
+        use_causal_mask = attention_mask is None and is_fully_causal
 
         combined_attention_mask = None
-        if (
-            not self.has_flash_attn
-            or attention_mask is not None
-            or (self.is_causal and not use_causal_mask)
-        ):
+        if attention_mask is not None or (self.is_causal and not use_causal_mask):
             combined_attention_mask = self._build_explicit_attention_mask(
                 attention_mask,
                 query,
@@ -173,30 +162,6 @@ class MultiHeadAttention(Attention):
                 attention_positions,
             )
         return combined_attention_mask, use_causal_mask
-
-    def attention(
-        self,
-        query: torch.Tensor,
-        key: torch.Tensor,
-        value: torch.Tensor,
-        attention_mask=None,
-    ):
-        # (B, num_heads, T, head_dim) @ (B, num_heads, head_dim, T) -> (B, num_heads, T, T)
-        scale = 1.0 / math.sqrt(key.size(dim=-1))
-        attn = (query @ key.transpose(-2, -1)) * scale
-
-        # Apply mask to Q@K^T matrix. Where the mask is equal
-        # to zero we will replace the matrix's element at
-        # that position with -inf. We use -inf so when we apply
-        # softmax those elements will equal to 0.
-        if attention_mask is not None:
-            attn = attn.masked_fill(~attention_mask, float("-inf"))
-        attn = F.softmax(attn, dim=-1)
-
-        attn = self.attn_dropout(attn)
-
-        # (B, num_heads, T, T) x (B, num_heads, T, head_dim) -> (B, num_heads, T, head_dim)
-        return attn @ value
 
     def forward(
         self,
@@ -251,22 +216,14 @@ class MultiHeadAttention(Attention):
             k,
             attention_positions,
         )
-        if self.has_flash_attn:
-            attn = F.scaled_dot_product_attention(  # pylint: disable=not-callable
-                q,
-                k,
-                v,
-                attn_mask=combined_attention_mask,
-                dropout_p=self.attn_dropout.p if self.training else 0.0,
-                is_causal=use_causal_mask,
-            )
-        else:
-            attn = self.attention(
-                q,
-                k,
-                v,
-                attention_mask=combined_attention_mask,
-            )
+        attn = F.scaled_dot_product_attention(  # pylint: disable=not-callable
+            q,
+            k,
+            v,
+            attn_mask=combined_attention_mask,
+            dropout_p=self.attn_dropout.p if self.training else 0.0,
+            is_causal=use_causal_mask,
+        )
 
         # Convert multi-headed shaped matrix back to original shape
         # (B, num_heads, T, head_dim) -> (B, T, num_heads, head_dim)

@@ -1,4 +1,3 @@
-from .attention import Attention
 from .casual_attention import CausalMultiHeadAttention
 from .config import AttentionConfig, AttentionLayerConfig
 from .grouped_query_attention import GroupedQueryAttention

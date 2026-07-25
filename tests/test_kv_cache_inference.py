@@ -1,6 +1,5 @@
 import pytest
 import torch
-from torch.nn import functional as F
 
 from lm_builder import TextGenerationPipeline
 from lm_builder.attention import (
@@ -91,13 +90,11 @@ def build_position_ids(input_ids, attention_mask=None):
     ],
 )
 @pytest.mark.parametrize("position_type", ["absolute", "rotary"])
-@pytest.mark.parametrize("use_scaled_dot_product_attention", [True, False])
 @pytest.mark.parametrize("with_attention_mask", [True, False])
 @pytest.mark.parametrize("with_qk_norm", [True, False])
 def test_cached_decode_matches_full_forward(
     attention_type,
     position_type,
-    use_scaled_dot_product_attention,
     with_attention_mask,
     with_qk_norm,
 ):
@@ -107,10 +104,6 @@ def test_cached_decode_matches_full_forward(
         position_type=position_type,
         qk_norm={"type": "RMSNorm"} if with_qk_norm else None,
     )
-    for block in model.blocks:
-        block.attn.has_flash_attn = use_scaled_dot_product_attention and hasattr(
-            F, "scaled_dot_product_attention"
-        )
 
     input_ids = torch.tensor([[0, 2, 3, 4], [5, 6, 7, 8]])
     attention_mask = (

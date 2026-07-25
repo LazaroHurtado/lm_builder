@@ -412,10 +412,8 @@ def test_example_configs_use_resolved_module_configs(
 
 
 @pytest.mark.parametrize("position_type", ["absolute", "rotary"])
-@pytest.mark.parametrize("use_scaled_dot_product_attention", [True, False])
 def test_left_padding_does_not_change_content_logits(
     position_type,
-    use_scaled_dot_product_attention,
 ):
     attention_config = build_attention_configs(
         context_length=4,
@@ -442,9 +440,6 @@ def test_left_padding_does_not_change_content_logits(
             positional_embedding=AbsolutePE if position_type == "absolute" else None,
         )
     ).eval()
-    model.blocks[0].attn.has_flash_attn = use_scaled_dot_product_attention and hasattr(
-        F, "scaled_dot_product_attention"
-    )
     input_ids = torch.tensor([[2, 3]])
     attention_mask = torch.tensor([[1, 1]])
     padded_input_ids = torch.tensor([[0, 0, 2, 3], [4, 5, 6, 7]])

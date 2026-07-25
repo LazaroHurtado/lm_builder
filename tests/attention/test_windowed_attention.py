@@ -1,5 +1,6 @@
 import pytest
 import torch
+from torch.nn import functional as F
 
 from lm_builder.attention import (
     AttentionLayerConfig,
@@ -143,7 +144,12 @@ def test_windowed_attention_uses_only_the_current_window():
         device=attention.qkv_proj.weight.device,
     )
 
-    output = attention.attention(query, key, value, attention_mask)
+    output = F.scaled_dot_product_attention(  # pylint: disable=not-callable
+        query,
+        key,
+        value,
+        attn_mask=attention_mask,
+    )
 
     expected_output = torch.tensor([[[[1.0], [1.5], [3.0], [6.0]]]])
     assert torch.allclose(output, expected_output)

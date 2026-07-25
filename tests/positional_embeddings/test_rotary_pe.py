@@ -1,6 +1,5 @@
 import pytest
 import torch
-from torch.nn import functional as F
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import (
     LlamaRotaryEmbedding,
@@ -201,10 +200,7 @@ def test_prepare_and_apply_qk_compile_as_one_full_graph(rope: RotaryPE):
     torch.testing.assert_close(actual[1], expected[1])
 
 
-@pytest.mark.parametrize("use_scaled_dot_product_attention", [True, False])
-def test_rope_preserves_half_precision_with_position_ids(
-    use_scaled_dot_product_attention,
-):
+def test_rope_preserves_half_precision_with_position_ids():
     rope = RotaryPE(HEAD_DIM // NUM_HEAD, SEQ_LEN, BASE)
     attention = CausalMultiHeadAttention(
         AttentionLayerConfig(
@@ -215,10 +211,6 @@ def test_rope_preserves_half_precision_with_position_ids(
         ),
         qk_positional_embedding=rope,
     ).half()
-    attention.has_flash_attn = use_scaled_dot_product_attention and hasattr(
-        F,
-        "scaled_dot_product_attention",
-    )
     inputs = torch.randn(2, SEQ_LEN, HEAD_DIM, dtype=torch.float16)
     attention_mask = torch.ones(2, SEQ_LEN, dtype=torch.bool)
     position_ids = torch.arange(SEQ_LEN).repeat(2, 1)
