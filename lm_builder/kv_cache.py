@@ -1,6 +1,6 @@
 import torch
 
-from ..utils import is_positive_integer
+from .utils import is_positive_integer
 
 
 class KVCache:

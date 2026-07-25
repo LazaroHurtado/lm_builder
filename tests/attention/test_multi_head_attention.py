@@ -7,9 +7,8 @@ from lm_builder.attention import (
     AttentionLayerConfig,
     CausalMultiHeadAttention,
     GroupedQueryAttention,
-    MultiQueryAttention,
 )
-from lm_builder.inference import KVCache
+from lm_builder.kv_cache import KVCache
 from lm_builder.normalizers import NormalizerConfig, RMSNorm
 
 
@@ -64,7 +63,7 @@ def test_scaled_dot_product_attention_dropout_respects_module_mode(monkeypatch):
     ("attention_type", "kv_heads", "kv_dimension"),
     [
         (CausalMultiHeadAttention, 4, 8),
-        (MultiQueryAttention, 1, 2),
+        (GroupedQueryAttention, 1, 2),
         (GroupedQueryAttention, 2, 4),
     ],
 )
@@ -187,7 +186,7 @@ def test_explicit_head_dimension_sizes_fused_and_output_projections():
     ("attention_type", "kv_heads"),
     [
         (CausalMultiHeadAttention, 4),
-        (MultiQueryAttention, 1),
+        (GroupedQueryAttention, 1),
         (GroupedQueryAttention, 2),
     ],
 )

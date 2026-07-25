@@ -1,7 +1,7 @@
 import torch
 
 from lm_builder.attention import AttentionLayerConfig, GroupedQueryAttention
-from lm_builder.inference import KVCache
+from lm_builder.kv_cache import KVCache
 
 
 def test_grouped_query_attention_shares_key_value_heads():

@@ -7,26 +7,25 @@ from lm_builder.attention import (
     CausalMultiHeadAttention,
     GroupedQueryAttention,
     MultiHeadAttention,
-    MultiQueryAttention,
 )
 
 
 @pytest.mark.parametrize(
-    "attention_type",
+    "attention_type,kv_heads",
     [
-        CausalMultiHeadAttention,
-        MultiQueryAttention,
-        GroupedQueryAttention,
+        (CausalMultiHeadAttention, 2),
+        (GroupedQueryAttention, 1),
+        (GroupedQueryAttention, 2),
     ],
 )
-def test_causal_attention_builds_windowed_mask(attention_type):
+def test_causal_attention_builds_windowed_mask(attention_type, kv_heads):
     attention = attention_type(
         AttentionLayerConfig(
             context_length=5,
             embedding_dimension=8,
             num_heads=4,
             attention_type=attention_type,
-            kv_heads=2,
+            kv_heads=kv_heads,
             window_size=3,
         )
     )

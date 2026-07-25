@@ -1,15 +1,14 @@
 from __future__ import annotations
 
+from .casual_attention import CausalMultiHeadAttention
 from .config import AttentionLayerConfig
-from .multi_query_attention import MultiQueryAttention
 
 
-class GroupedQueryAttention(MultiQueryAttention):
-    # GroupedQueryAttention (GQA) is similar to MultiQueryAttention (MQA) but
-    # instead of having a single key and value head that is shared across all
-    # query heads, we have multiple which are shared. For example, in MQA we have
-    # 1 key and value head that is shared across 8 query heads, but in GQA we could
-    # have 4 key and value heads where each head is shared with 2 of the 8 query heads.
+class GroupedQueryAttention(CausalMultiHeadAttention):
+    # GroupedQueryAttention (GQA) shares each key and value head across a group of
+    # query heads. For example, 4 key/value heads across 8 query heads means each
+    # key/value head is shared by 2 query heads. kv_heads=1 shares a single
+    # key/value head across every query head, which is multi-query attention.
 
     def _get_num_kv_heads(self, config: AttentionLayerConfig):
         return config.kv_heads

@@ -3,7 +3,7 @@ import time
 import torch
 import torch.nn.functional as F
 
-from .inference import KVCache
+from .kv_cache import KVCache
 from .transformer import Transformer
 
 

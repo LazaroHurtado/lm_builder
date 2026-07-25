@@ -4,7 +4,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from ..inference import KVCache
+from ..kv_cache import KVCache
 from .config import AttentionLayerConfig
 
 

@@ -7,10 +7,9 @@ from lm_builder.attention import (
     CausalMultiHeadAttention,
     GroupedQueryAttention,
     MultiHeadAttention,
-    MultiQueryAttention,
 )
 from lm_builder.ffn import FeedForward, FeedForwardConfig
-from lm_builder.inference import KVCache
+from lm_builder.kv_cache import KVCache
 from lm_builder.positional_embeddings import AbsolutePE, RotaryPE
 from lm_builder.transformer import Transformer, TransformerConfig
 
@@ -23,6 +22,7 @@ def build_model(
     ratio=None,
     window_size=3,
     qk_norm=None,
+    kv_heads=2,
 ):
     attention_types = (
         attention_type if isinstance(attention_type, list) else [attention_type]
@@ -42,7 +42,7 @@ def build_model(
             "layers": [
                 {
                     "type": resolved_attention_type,
-                    "kv_heads": 2,
+                    "kv_heads": kv_heads,
                     "window_size": resolved_window_size,
                 }
                 for resolved_attention_type, resolved_window_size in zip(
@@ -82,11 +82,11 @@ def build_position_ids(input_ids, attention_mask=None):
 
 
 @pytest.mark.parametrize(
-    "attention_type",
+    "attention_type,kv_heads",
     [
-        CausalMultiHeadAttention,
-        MultiQueryAttention,
-        GroupedQueryAttention,
+        (CausalMultiHeadAttention, 2),
+        (GroupedQueryAttention, 1),
+        (GroupedQueryAttention, 2),
     ],
 )
 @pytest.mark.parametrize("position_type", ["absolute", "rotary"])
@@ -94,6 +94,7 @@ def build_position_ids(input_ids, attention_mask=None):
 @pytest.mark.parametrize("with_qk_norm", [True, False])
 def test_cached_decode_matches_full_forward(
     attention_type,
+    kv_heads,
     position_type,
     with_attention_mask,
     with_qk_norm,
@@ -101,6 +102,7 @@ def test_cached_decode_matches_full_forward(
     torch.manual_seed(7)
     model = build_model(
         attention_type=attention_type,
+        kv_heads=kv_heads,
         position_type=position_type,
         qk_norm={"type": "RMSNorm"} if with_qk_norm else None,
     )
@@ -268,17 +270,21 @@ def test_generate_sizes_kv_cache_to_sequence_budget(
 
 
 @pytest.mark.parametrize(
-    "attention_type",
+    "attention_type,kv_heads",
     [
-        CausalMultiHeadAttention,
-        MultiQueryAttention,
-        GroupedQueryAttention,
+        (CausalMultiHeadAttention, 2),
+        (GroupedQueryAttention, 1),
+        (GroupedQueryAttention, 2),
     ],
 )
-def test_absolute_position_cache_recomputes_across_context_overflow(attention_type):
+def test_absolute_position_cache_recomputes_across_context_overflow(
+    attention_type,
+    kv_heads,
+):
     torch.manual_seed(13)
     model = build_model(
         attention_type=attention_type,
+        kv_heads=kv_heads,
         position_type="absolute",
         context_length=4,
     )
@@ -323,20 +329,22 @@ def test_absolute_position_cache_recomputes_across_context_overflow(attention_ty
 
 
 @pytest.mark.parametrize(
-    "attention_type",
+    "attention_type,kv_heads",
     [
-        CausalMultiHeadAttention,
-        MultiQueryAttention,
-        GroupedQueryAttention,
+        (CausalMultiHeadAttention, 2),
+        (GroupedQueryAttention, 1),
+        (GroupedQueryAttention, 2),
     ],
 )
 @pytest.mark.parametrize("position_type", ["rotary", None])
 def test_rolling_cache_keeps_single_token_decoding_after_overflow(
     attention_type,
+    kv_heads,
     position_type,
 ):
     model = build_model(
         attention_type=attention_type,
+        kv_heads=kv_heads,
         position_type=position_type,
         context_length=4,
     )
@@ -362,21 +370,23 @@ def test_rolling_cache_keeps_single_token_decoding_after_overflow(
 
 
 @pytest.mark.parametrize(
-    "attention_type",
+    "attention_type,kv_heads",
     [
-        CausalMultiHeadAttention,
-        MultiQueryAttention,
-        GroupedQueryAttention,
+        (CausalMultiHeadAttention, 2),
+        (GroupedQueryAttention, 1),
+        (GroupedQueryAttention, 2),
     ],
 )
 @pytest.mark.parametrize("with_attention_mask", [True, False])
 def test_rolling_cache_handles_prompt_longer_than_context(
     attention_type,
+    kv_heads,
     with_attention_mask,
 ):
     torch.manual_seed(19)
     model = build_model(
         attention_type=attention_type,
+        kv_heads=kv_heads,
         position_type="rotary",
         context_length=4,
         num_layers=1,

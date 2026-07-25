@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from lm_builder.inference import KVCache
+from lm_builder.kv_cache import KVCache
 
 
 def test_kv_cache_updates_fixed_storage_on_sequence_axis():
