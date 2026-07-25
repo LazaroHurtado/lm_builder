@@ -9,6 +9,14 @@ def is_positive_integer(value):
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
+def get_device():
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
 def load_yml(file):
     with open(file, "r", encoding="utf-8") as config_file:
         return yaml.safe_load(config_file)

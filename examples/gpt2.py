@@ -8,15 +8,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from lm_builder import TextGenerationPipeline
 from lm_builder.transformer import Transformer, TransformerConfig
-from lm_builder.utils import change_state_dict_names
-
-
-def get_device():
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
+from lm_builder.utils import change_state_dict_names, get_device
 
 
 class GPT2Loader:

@@ -7,17 +7,13 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from lm_builder import TextGenerationPipeline
 from lm_builder.transformer import Transformer, TransformerConfig
-from lm_builder.utils import change_state_dict_names, combine_qkv_projections
+from lm_builder.utils import (
+    change_state_dict_names,
+    combine_qkv_projections,
+    get_device,
+)
 
 load_dotenv()
-
-
-def get_device():
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
 
 
 class Llama2Loader:
@@ -67,10 +63,11 @@ class Llama2Loader:
 
 
 def main():
-    if not os.path.exists("llama2_weights.pth"):
+    if not os.path.exists(Llama2Loader.WEIGHTS_FILE):
         print("Building Llama2 state dict...")
         Llama2Loader().build_state_dict()
 
+    device = get_device()
     with torch.no_grad():
         llama2_7b = Llama2Loader().build_model("meta")
         state_dict = torch.load(Llama2Loader.WEIGHTS_FILE, map_location="cpu")
@@ -83,7 +80,7 @@ def main():
             {"role": "user", "content": "Who is Claude Shannon?"},
         ]
 
-        llama2_7b.to(DEVICE)
+        llama2_7b.to(device)
         tokenizer = AutoTokenizer.from_pretrained(Llama2Loader.HF_MODEL_NAME)
         pipeline = TextGenerationPipeline(llama2_7b, tokenizer)
         pipeline.prompt(
@@ -93,7 +90,7 @@ def main():
             apply_chat_template=True,
             stream=True,
             debug=True,
-            device=DEVICE,
+            device=device,
             use_cache=True,
         )
 

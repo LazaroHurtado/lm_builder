@@ -10,6 +10,7 @@ from tqdm.auto import tqdm, trange
 from transformers import AutoTokenizer
 
 from lm_builder.transformer import Transformer, TransformerConfig
+from lm_builder.utils import get_device
 
 DATASET_NAME = "roneneldan/TinyStories"
 TOKENIZER_NAME = "openai-community/gpt2"
@@ -24,14 +25,6 @@ LEARNING_RATE = 3e-4
 # Weight for the mixture-of-experts load-balancing (routing) auxiliary loss.
 ROUTING_LOSS_COEFFICIENT = 0.01
 SEED = 42
-
-
-def get_device():
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
 
 
 def get_amp_dtype(device):
