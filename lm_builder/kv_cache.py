@@ -12,8 +12,10 @@ class KVCache:
         self.k = None
         self.v = None
         self.key_mask = None
+        self.active_length = 0
 
     def reset(self):
+        self.active_length = 0
         if self.key_mask is not None:
             # Invalid entries are ignored, so the large K/V tensors need not be cleared.
             self.key_mask.zero_()
@@ -59,10 +61,19 @@ class KVCache:
         self.v.index_copy_(2, slots, v)
         self.key_mask.index_copy_(1, slots, attention_mask)
 
-        all_slots = torch.arange(self.capacity, device=k.device)
+        self.active_length = min(
+            self.active_length + num_tokens,
+            self.capacity,
+        )
+        all_slots = torch.arange(self.active_length, device=k.device)
         latest_position = cache_position[-1]
         key_positions = latest_position - torch.remainder(
             latest_position - all_slots,
             self.capacity,
         )
-        return self.k, self.v, self.key_mask, key_positions
+        return (
+            self.k[:, :, : self.active_length],
+            self.v[:, :, : self.active_length],
+            self.key_mask[:, : self.active_length],
+            key_positions,
+        )

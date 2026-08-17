@@ -4,14 +4,18 @@ import torch
 from lm_builder.kv_cache import KVCache
 
 
-def test_kv_cache_updates_fixed_storage_on_sequence_axis():
+def test_kv_cache_reuses_fixed_storage_and_returns_populated_views():
     cache = KVCache(capacity=4)
     first_key = torch.randn(2, 3, 2, 5)
     first_value = torch.randn(2, 3, 2, 5)
     second_key = torch.randn(2, 3, 1, 5)
     second_value = torch.randn(2, 3, 1, 5)
 
-    cache.update(first_key, first_value, torch.tensor([0, 1]))
+    first_cached_key, first_cached_value, first_mask, _ = cache.update(
+        first_key,
+        first_value,
+        torch.tensor([0, 1]),
+    )
     key_storage = cache.k
     value_storage = cache.v
     key, value, key_mask, _ = cache.update(
@@ -20,25 +24,21 @@ def test_kv_cache_updates_fixed_storage_on_sequence_axis():
         torch.tensor([2]),
     )
 
-    assert cache.capacity == 4
-    assert key is key_storage
-    assert value is value_storage
-    assert key.size(2) == 4
-    assert value.size(2) == 4
-    assert torch.equal(key[:, :, :3], torch.cat((first_key, second_key), dim=2))
-    assert torch.equal(
-        value[:, :, :3],
-        torch.cat((first_value, second_value), dim=2),
-    )
-    assert torch.equal(
-        key_mask,
-        torch.tensor(
-            [
-                [True, True, True, False],
-                [True, True, True, False],
-            ]
-        ),
-    )
+    assert cache.k is key_storage
+    assert cache.v is value_storage
+    assert cache.k.size(2) == cache.capacity == 4
+    assert cache.v.size(2) == 4
+    assert first_cached_key.size(2) == 2
+    assert first_cached_value.size(2) == 2
+    assert first_mask.size(1) == 2
+    assert key.size(2) == 3
+    assert value.size(2) == 3
+    assert key_mask.size(1) == 3
+    assert key.untyped_storage().data_ptr() == cache.k.untyped_storage().data_ptr()
+    assert value.untyped_storage().data_ptr() == cache.v.untyped_storage().data_ptr()
+    assert torch.equal(key, torch.cat((first_key, second_key), dim=2))
+    assert torch.equal(value, torch.cat((first_value, second_value), dim=2))
+    assert key_mask.all()
 
 
 def test_kv_cache_reset_reuses_allocated_storage():
@@ -62,6 +62,8 @@ def test_kv_cache_reset_reuses_allocated_storage():
 
     assert cache.k is key_storage
     assert cache.v is value_storage
+    assert cached_key.size(2) == 1
+    assert cached_value.size(2) == 1
     assert torch.equal(cached_key[:, :, :1], new_key)
     assert torch.equal(cached_value[:, :, :1], new_value)
 
@@ -114,8 +116,8 @@ def test_kv_cache_tracks_padding():
         key_mask,
         torch.tensor(
             [
-                [False, True, True, False],
-                [True, True, True, False],
+                [False, True, True],
+                [True, True, True],
             ]
         ),
     )

@@ -59,6 +59,39 @@ def test_scaled_dot_product_attention_dropout_respects_module_mode(monkeypatch):
     assert dropout_probabilities == [0.0, 0.5]
 
 
+def test_cached_attention_only_reads_populated_cache(monkeypatch):
+    attention = CausalMultiHeadAttention(
+        AttentionLayerConfig(
+            context_length=8,
+            embedding_dimension=8,
+            num_heads=2,
+            attention_type=CausalMultiHeadAttention,
+        )
+    ).eval()
+    cache = KVCache(capacity=8)
+    key_lengths = []
+    scaled_dot_product_attention = F.scaled_dot_product_attention
+
+    def record_key_length(query, key, value, **kwargs):
+        key_lengths.append(key.size(2))
+        return scaled_dot_product_attention(query, key, value, **kwargs)
+
+    monkeypatch.setattr(F, "scaled_dot_product_attention", record_key_length)
+    attention(
+        torch.randn(1, 3, 8),
+        kv_cache=cache,
+        cache_position=torch.arange(3),
+    )
+    attention(
+        torch.randn(1, 1, 8),
+        kv_cache=cache,
+        cache_position=torch.tensor([3]),
+    )
+
+    assert cache.k.size(2) == 8
+    assert key_lengths == [3, 4]
+
+
 @pytest.mark.parametrize(
     ("attention_type", "kv_heads", "kv_dimension"),
     [

@@ -220,7 +220,7 @@ def test_generation_projects_only_last_hidden_state_to_vocabulary():
 
 def test_compiled_generation_reuses_one_decode_graph_across_cache_overflow():
     model = build_model(
-        context_length=4,
+        context_length=6,
         num_layers=1,
     )
     graph_count = 0
