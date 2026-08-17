@@ -89,10 +89,19 @@ class Transformer(nn.Module):
         position_ids=None,
         cache_position=None,
         *,
+        logits_to_keep=0,
         _kv_caches=None,
     ):
         B, T = x.size()  # pylint: disable=invalid-name
         assert T <= self.context_length
+        if (
+            not isinstance(logits_to_keep, int)
+            or isinstance(logits_to_keep, bool)
+            or logits_to_keep < 0
+        ):
+            raise ValueError("logits_to_keep must be a non-negative integer.")
+        if targets is not None and logits_to_keep:
+            raise ValueError("logits_to_keep must be 0 when targets are provided.")
 
         if _kv_caches is not None:
             if len(_kv_caches) != len(self.blocks):
@@ -151,6 +160,8 @@ class Transformer(nn.Module):
             if routing_loss is not None:
                 routing_losses.append(routing_loss)
         x = self.norm(x)
+        if logits_to_keep:
+            x = x[:, -logits_to_keep:, :]
         # (B, T, C) -> (B, T, V)
         logits = self.lm_head(x)
 

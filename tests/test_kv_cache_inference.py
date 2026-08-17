@@ -196,6 +196,28 @@ def test_generate_prefills_once_then_decodes_single_tokens():
         hook.remove()
 
 
+def test_generation_projects_only_last_hidden_state_to_vocabulary():
+    model = build_model(context_length=8)
+    pipeline = TextGenerationPipeline(model, tokenizer=None)
+    projected_sequence_lengths = []
+    hook = model.lm_head.register_forward_pre_hook(
+        lambda _, inputs: projected_sequence_lengths.append(inputs[0].size(1))
+    )
+
+    try:
+        list(
+            pipeline.generate(
+                torch.tensor([[1, 2, 3]]),
+                max_new_tokens=3,
+                temperature=0,
+            )
+        )
+    finally:
+        hook.remove()
+
+    assert projected_sequence_lengths == [1, 1, 1]
+
+
 def test_compiled_generation_reuses_one_decode_graph_across_cache_overflow():
     model = build_model(
         context_length=4,

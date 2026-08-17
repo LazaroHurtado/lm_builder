@@ -76,6 +76,7 @@ class RecordingModel(nn.Module):
         position_ids=None,
         cache_position=None,
         *,
+        logits_to_keep=0,
         _kv_caches=None,
     ):
         self.attention_masks.append(attention_mask.clone())
@@ -108,6 +109,7 @@ class ScriptedModel(nn.Module):
         position_ids=None,
         cache_position=None,
         *,
+        logits_to_keep=0,
         _kv_caches=None,
     ):
         next_token_ids = torch.tensor(

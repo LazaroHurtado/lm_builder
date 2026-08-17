@@ -114,6 +114,45 @@ def test_forward_computes_cross_entropy_per_token():
     assert model.lm_head.weight.grad is not None
 
 
+def test_forward_can_keep_last_logits():
+    model = build_transformer().eval()
+    input_ids = torch.tensor([[1, 2, 3]])
+
+    full_logits, _, _ = model(input_ids)
+    kept_logits, _, _ = model(input_ids, logits_to_keep=2)
+
+    assert kept_logits.shape == (1, 2, model.config.vocab_size)
+    torch.testing.assert_close(kept_logits, full_logits[:, -2:, :])
+
+
+def test_forward_keeps_all_logits_when_requested_count_exceeds_sequence_length():
+    model = build_transformer().eval()
+    input_ids = torch.tensor([[1, 2, 3]])
+
+    full_logits, _, _ = model(input_ids)
+    kept_logits, _, _ = model(input_ids, logits_to_keep=4)
+
+    assert kept_logits.shape == full_logits.shape
+    torch.testing.assert_close(kept_logits, full_logits)
+
+
+@pytest.mark.parametrize("logits_to_keep", [-1, 1.5, True])
+def test_forward_rejects_invalid_logits_to_keep(logits_to_keep):
+    model = build_transformer().eval()
+
+    with pytest.raises(ValueError, match="non-negative integer"):
+        model(torch.tensor([[1, 2, 3]]), logits_to_keep=logits_to_keep)
+
+
+def test_forward_rejects_logits_to_keep_with_targets():
+    model = build_transformer()
+    input_ids = torch.tensor([[1, 2, 3]])
+    targets = torch.tensor([[2, 3, 4]])
+
+    with pytest.raises(ValueError, match="must be 0 when targets are provided"):
+        model(input_ids, targets, logits_to_keep=1)
+
+
 def test_qk_positional_embedding_prepares_once_and_applies_per_layer():
     positional_embedding_config = PositionalEmbeddingConfig(
         positional_embedding_type=RecordingQKPositionalEmbedding

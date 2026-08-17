@@ -175,6 +175,7 @@ class TextGenerationPipeline:
                 attention_mask=model_attention_mask,
                 position_ids=position_ids,
                 cache_position=cache_position,
+                logits_to_keep=1,
                 _kv_caches=kv_caches,
             )
             logits = logits[:, -1, :]
