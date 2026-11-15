@@ -1,14 +1,34 @@
 ## Description
-This project is dedicated to decreasing the development time for language models (LMs). Most LMs share the same building blocks since they are based on the transformer architecture; several layers/blocks of an attention mechanism and feed forward layer. These building blocks usually differ in minor ways; grouped-query attention, mixture of experts, positional embedding. Thus, a framework dedicated to increase the speed of development for LMs by having prebuilt classes for these varients and making it easier for developers to develop their own is possible.
+This project provides reusable transformer building blocks for training language
+models, including grouped-query attention, mixture-of-experts layers, and
+positional embeddings.
 
 ## Getting started
 
-Begin by creating a virtual environment (venv) and running our gpt2 example file:
+Install the dependencies and run the TinyStories training example:
 
 ```zsh
 $ uv sync
 $ source ./.venv/bin/activate
-$ python3 ./examples/gpt2.py
+$ python3 ./examples/train_tinystories.py
+```
+
+The GPT-2, Llama 2, and Qwen 3 example scripts convert pretrained checkpoints
+to this framework's parameter names and generate text.
+
+### Example text generation
+
+`TextGenerationPipeline` supports prompts, chat templates, streaming, temperature,
+top-k and top-p sampling, and EOS stopping. Generation recomputes the full context
+for each new token, cropping inputs and padding masks to `model.context_length`.
+The model's training forward path remains stateless.
+
+```python
+from lm_builder import TextGenerationPipeline
+
+model.eval()
+pipeline = TextGenerationPipeline(model, tokenizer)
+output = pipeline.prompt("Hello", max_new_tokens=20, temperature=0)
 ```
 
 ### Attention layer patterns
@@ -55,8 +75,8 @@ shared positional embedding instance for the model.
 
 `norm` configures residual-stream normalization before attention. Optional
 `qk_norm` builds independent query and key normalizers over each head's
-`head_dim`. They run after head shaping and before positional embeddings, KV
-caching, and GQA/MQA key-value head sharing. Values are not normalized. Omit
+`head_dim`. They run after head shaping and before positional embeddings and
+GQA/MQA key-value head sharing. Values are not normalized. Omit
 `qk_norm` to preserve the original attention behavior and parameter layout.
 
 Q/K positional embeddings use a two-phase interface. `Transformer.forward()`
@@ -142,46 +162,6 @@ This portable path avoids a specialized grouped-matrix-multiplication kernel,
 but dynamic `nonzero` operations may introduce synchronization or reduce
 compiler performance. Routed activation modules must remain stateless.
 
-### KV-cached generation
-
-`TextGenerationPipeline.generate()` and `TextGenerationPipeline.prompt()` use an
-inference-only KV cache by default for causal attention models. The pipeline owns
-a `Transformer` and tokenizer while leaving model parameters, device placement,
-and compilation on the transformer itself. The prompt is evaluated once, then
-only the newest token is evaluated. Each layer allocates
-`min(context_length, prompt_length + max_new_tokens)` cache entries instead of
-always allocating the full context window. Cache tensors and their key mask keep
-that fixed shape. New entries are written directly to
-`cache_position % capacity`; causal masks use logical positions instead of
-depending on the physical slot order. This avoids copying the existing cache on
-every token and lets a compiled model reuse one single-token decode graph as the
-cache fills and rolls over. The model must be in evaluation mode.
-Set `use_cache=False` to use full-sequence recomputation instead:
-
-```python
-import torch
-
-from lm_builder import TextGenerationPipeline
-
-model.eval()
-pipeline = TextGenerationPipeline(torch.compile(model), tokenizer)
-output = pipeline.prompt("Hello", use_cache=False)
-```
-
-For rotary or no positional embeddings, a full cache evicts its oldest key/value
-entry and continues single-token decoding. Cache capacity never exceeds
-`context_length`. Retained cached states preserve information from tokens that
-have since been evicted, so output after overflow can differ from uncached
-sliding-window recomputation.
-
-Models with absolute input positional embeddings reset the cache and recompute
-the current context window after overflow because cached states cannot be safely
-reindexed.
-
-Generation stops after every batch row emits any `eos_token_id`; pass one ID or
-a list, tuple, or tensor, or use the tokenizer default. Without one,
-`max_new_tokens` remains the limit.
-
 ### Todo
 
 - Add tests
@@ -189,10 +169,6 @@ a list, tuple, or tensor, or use the tokenizer default. Without one,
     - ~~multi-headed attention~~
     - ~~grouped-query attention~~
     - ~~sliding window attention~~
-- Caching
-    - ~~kv cache~~
-    - chunked kv cache
-    - ~~rolling buffer caching after context overflow~~
 - ~~Mixture of experts~~
 - Positional embedding
     - ~~absolute p.e.~~

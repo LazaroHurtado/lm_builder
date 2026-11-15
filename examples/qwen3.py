@@ -37,11 +37,7 @@ class Qwen3Loader:
     def build_model(self, rank):
         transformer_config = TransformerConfig.from_yml(self.MODEL_ARCH_FILE)
 
-        with torch.no_grad():
-            qwen3 = Transformer(transformer_config)
-            qwen3.to(rank)
-            qwen3.eval()
-        return qwen3
+        return Transformer(transformer_config).to(rank)
 
     def convert_state_dict(self, original_state_dict):
         name_changes = [
@@ -67,36 +63,28 @@ def main():
         loader.build_state_dict()
 
     device = get_device()
-    with torch.no_grad():
-        qwen3 = loader.build_model("meta")
-        state_dict = torch.load(loader.WEIGHTS_FILE, map_location="cpu")
-        qwen3.load_state_dict(state_dict, assign=True)
+    qwen3 = loader.build_model("meta")
+    state_dict = torch.load(loader.WEIGHTS_FILE, map_location="cpu")
+    qwen3.load_state_dict(state_dict, assign=True)
+    del state_dict
+    gc.collect()
 
-        del state_dict
-        gc.collect()
-
-        messages = [
-            {"role": "user", "content": "Who is Claude Shannon?"},
-        ]
-        generation_config = GenerationConfig.from_pretrained(loader.HF_MODEL_NAME)
-
-        qwen3.to(device)
-        qwen3 = torch.compile(qwen3, fullgraph=True)
-        tokenizer = AutoTokenizer.from_pretrained(loader.HF_MODEL_NAME)
-        pipeline = TextGenerationPipeline(qwen3, tokenizer)
-        pipeline.prompt(
-            messages,
-            max_new_tokens=4096,
-            temperature=generation_config.temperature,
-            top_k=generation_config.top_k,
-            top_p=generation_config.top_p,
-            eos_token_id=generation_config.eos_token_id,
-            apply_chat_template=True,
-            stream=True,
-            debug=True,
-            device=device,
-            use_cache=True,
-        )
+    qwen3.to(device).eval()
+    tokenizer = AutoTokenizer.from_pretrained(loader.HF_MODEL_NAME)
+    generation_config = GenerationConfig.from_pretrained(loader.HF_MODEL_NAME)
+    pipeline = TextGenerationPipeline(torch.compile(qwen3, fullgraph=True), tokenizer)
+    pipeline.prompt(
+        [{"role": "user", "content": "Who is Claude Shannon?"}],
+        max_new_tokens=4096,
+        temperature=generation_config.temperature,
+        top_k=generation_config.top_k,
+        top_p=generation_config.top_p,
+        eos_token_id=generation_config.eos_token_id,
+        apply_chat_template=True,
+        stream=True,
+        debug=True,
+        device=device,
+    )
 
 
 if __name__ == "__main__":

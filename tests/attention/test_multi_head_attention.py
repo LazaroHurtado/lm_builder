@@ -8,7 +8,6 @@ from lm_builder.attention import (
     CausalMultiHeadAttention,
     GroupedQueryAttention,
 )
-from lm_builder.kv_cache import KVCache
 from lm_builder.normalizers import NormalizerConfig, RMSNorm
 
 
@@ -57,39 +56,6 @@ def test_scaled_dot_product_attention_dropout_respects_module_mode(monkeypatch):
     attention(inputs)
 
     assert dropout_probabilities == [0.0, 0.5]
-
-
-def test_cached_attention_only_reads_populated_cache(monkeypatch):
-    attention = CausalMultiHeadAttention(
-        AttentionLayerConfig(
-            context_length=8,
-            embedding_dimension=8,
-            num_heads=2,
-            attention_type=CausalMultiHeadAttention,
-        )
-    ).eval()
-    cache = KVCache(capacity=8)
-    key_lengths = []
-    scaled_dot_product_attention = F.scaled_dot_product_attention
-
-    def record_key_length(query, key, value, **kwargs):
-        key_lengths.append(key.size(2))
-        return scaled_dot_product_attention(query, key, value, **kwargs)
-
-    monkeypatch.setattr(F, "scaled_dot_product_attention", record_key_length)
-    attention(
-        torch.randn(1, 3, 8),
-        kv_cache=cache,
-        cache_position=torch.arange(3),
-    )
-    attention(
-        torch.randn(1, 1, 8),
-        kv_cache=cache,
-        cache_position=torch.tensor([3]),
-    )
-
-    assert cache.k.size(2) == 8
-    assert key_lengths == [3, 4]
 
 
 @pytest.mark.parametrize(
@@ -304,7 +270,8 @@ def test_qk_norm_adds_no_modules_or_parameters_when_disabled():
     )
 
 
-def test_qk_norm_preserves_kv_dtype_during_autocast():
+def test_qk_norm_preserves_training_dtype_during_autocast():
+    positional_embedding = RecordingPositionalEmbedding()
     attention = CausalMultiHeadAttention(
         AttentionLayerConfig(
             context_length=4,
@@ -312,54 +279,33 @@ def test_qk_norm_preserves_kv_dtype_during_autocast():
             num_heads=4,
             attention_type=CausalMultiHeadAttention,
             qk_norm=NormalizerConfig.build_config({"type": "RMSNorm"}),
-        )
-    ).eval()
-    kv_cache = KVCache(capacity=4)
+        ),
+        qk_positional_embedding=positional_embedding,
+    )
 
     with torch.autocast("cpu", dtype=torch.bfloat16):
-        attention(
+        output = attention(
             torch.randn(2, 4, 8),
-            kv_cache=kv_cache,
-            cache_position=torch.arange(4),
+            qk_position_data=positional_embedding,
         )
+        loss = output.square().mean()
 
-    assert kv_cache.k.dtype is torch.bfloat16
-    assert kv_cache.v.dtype is torch.bfloat16
+    loss.backward()
+    assert positional_embedding.query.dtype is torch.bfloat16
+    assert positional_embedding.key.dtype is torch.bfloat16
+    assert output.dtype is torch.bfloat16
+    assert torch.isfinite(attention.qkv_proj.weight.grad).all()
 
 
-@pytest.mark.skipif(
-    not torch.backends.mps.is_available(),
-    reason="MPS is required for this Inductor regression test.",
-)
-def test_compiled_mps_decode_preserves_large_indexed_cache():
+@pytest.mark.parametrize("mask_shape", [(2, 3), (2, 5), (1, 4), (4,)])
+def test_attention_requires_mask_to_match_input_shape(mask_shape):
     attention = CausalMultiHeadAttention(
         AttentionLayerConfig(
-            context_length=4109,
+            context_length=4,
             embedding_dimension=8,
             num_heads=2,
             attention_type=CausalMultiHeadAttention,
         )
-    ).eval()
-    attention.to("mps")
-    kv_cache = KVCache(capacity=4109)
-    attention(
-        torch.randn(1, 13, 8, device="mps"),
-        attention_mask=torch.ones(1, 13, dtype=torch.bool, device="mps"),
-        kv_cache=kv_cache,
-        cache_position=torch.arange(13, device="mps"),
     )
-    retained_key = kv_cache.k[:, :, :13].clone()
-    retained_value = kv_cache.v[:, :, :13].clone()
-    compiled_attention = torch.compile(attention, fullgraph=True)
-
-    output = compiled_attention(
-        torch.randn(1, 1, 8, device="mps"),
-        attention_mask=torch.ones(1, 1, dtype=torch.bool, device="mps"),
-        kv_cache=kv_cache,
-        cache_position=torch.tensor([13], device="mps"),
-    )
-    torch.mps.synchronize()
-
-    assert output.shape == (1, 1, 8)
-    assert torch.equal(kv_cache.k[:, :, :13], retained_key)
-    assert torch.equal(kv_cache.v[:, :, :13], retained_value)
+    with pytest.raises(ValueError, match="must match the input sequence shape"):
+        attention(torch.randn(2, 4, 8), attention_mask=torch.ones(mask_shape))

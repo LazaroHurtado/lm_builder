@@ -6,7 +6,6 @@ from .multi_head_attention import MultiHeadAttention
 
 
 class CausalMultiHeadAttention(MultiHeadAttention):
-    supports_kv_cache = True
     supports_window_size = True
     is_causal = True
 
@@ -15,23 +14,14 @@ class CausalMultiHeadAttention(MultiHeadAttention):
         query_length,
         key_length,
         device,
-        attention_positions=None,
     ):
-        if attention_positions is None:
-            query_start = key_length - query_length
-            query_positions = torch.arange(
-                query_start,
-                key_length,
-                device=device,
-            )
-            key_positions = torch.arange(key_length, device=device)
-        else:
-            query_positions, key_positions = attention_positions
+        query_positions = torch.arange(query_length, device=device)
+        key_positions = torch.arange(key_length, device=device)
 
         # We unsqueeze the last and first dimensions of q and k here
         # and then do a `<=` comparison to build the 2d causal mask.
-        query_positions = query_positions.to(device).unsqueeze(-1)
-        key_positions = key_positions.to(device).unsqueeze(0)
+        query_positions = query_positions.unsqueeze(-1)
+        key_positions = key_positions.unsqueeze(0)
         attention_mask = key_positions <= query_positions
 
         if self.window_size is not None:

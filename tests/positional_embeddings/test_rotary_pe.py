@@ -34,15 +34,13 @@ def hf_rope():
     return LlamaRotaryEmbedding(config, device="cpu")
 
 
-def test_initialization_has_no_mutable_position_cache(rope: RotaryPE):
+def test_initialization(rope: RotaryPE):
     assert not isinstance(rope, torch.nn.Module)
     assert rope.embedding_dim == HEAD_DIM
     assert rope.context_len == SEQ_LEN
     assert rope.base == BASE
     assert rope.inv_freq.shape == (HEAD_DIM // 2,)
     assert rope.inv_freq.dtype == torch.float32
-    assert not hasattr(rope, "cos_cached")
-    assert not hasattr(rope, "sin_cached")
 
 
 def test_instances_are_independent():
@@ -152,32 +150,6 @@ def test_explicit_position_ids_match_hugging_face(
 
     assert torch.allclose(q_rotary, q_hf_rotary, atol=1e-5)
     assert torch.allclose(k_rotary, k_hf_rotary, atol=1e-5)
-
-
-def test_cached_decode_matches_full_rope_across_context_overflow():
-    rope = RotaryPE(HEAD_DIM, 4, BASE)
-    q = torch.randn(2, NUM_HEAD, 6, HEAD_DIM)
-    k = torch.randn_like(q)
-    position_ids = torch.arange(6).repeat(2, 1)
-
-    full_position_data = rope.prepare(q, position_ids)
-    full_q, full_k = rope.apply_qk(q, k, full_position_data)
-    cached_q, cached_k = zip(
-        *[
-            rope.apply_qk(
-                q[:, :, index : index + 1],
-                k[:, :, index : index + 1],
-                rope.prepare(
-                    q[:, :, index : index + 1],
-                    position_ids[:, index : index + 1],
-                ),
-            )
-            for index in range(position_ids.size(1))
-        ]
-    )
-
-    torch.testing.assert_close(torch.cat(cached_q, dim=2), full_q)
-    torch.testing.assert_close(torch.cat(cached_k, dim=2), full_k)
 
 
 def test_prepare_and_apply_qk_compile_as_one_full_graph(rope: RotaryPE):

@@ -447,10 +447,10 @@ def test_expert_dropout_is_applied_only_during_training():
     model.train()
     training_output, _ = model(inputs)
     model.eval()
-    inference_output, _ = model(inputs)
+    validation_output, _ = model(inputs)
 
     assert torch.count_nonzero(training_output) == 0
-    assert torch.count_nonzero(inference_output) == inference_output.numel()
+    assert torch.count_nonzero(validation_output) == validation_output.numel()
 
 
 @capture_dynamic_output_shapes

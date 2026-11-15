@@ -114,43 +114,13 @@ def test_forward_computes_cross_entropy_per_token():
     assert model.lm_head.weight.grad is not None
 
 
-def test_forward_can_keep_last_logits():
-    model = build_transformer().eval()
-    input_ids = torch.tensor([[1, 2, 3]])
-
-    full_logits, _, _ = model(input_ids)
-    kept_logits, _, _ = model(input_ids, logits_to_keep=2)
-
-    assert kept_logits.shape == (1, 2, model.config.vocab_size)
-    torch.testing.assert_close(kept_logits, full_logits[:, -2:, :])
-
-
-def test_forward_keeps_all_logits_when_requested_count_exceeds_sequence_length():
-    model = build_transformer().eval()
-    input_ids = torch.tensor([[1, 2, 3]])
-
-    full_logits, _, _ = model(input_ids)
-    kept_logits, _, _ = model(input_ids, logits_to_keep=4)
-
-    assert kept_logits.shape == full_logits.shape
-    torch.testing.assert_close(kept_logits, full_logits)
-
-
-@pytest.mark.parametrize("logits_to_keep", [-1, 1.5, True])
-def test_forward_rejects_invalid_logits_to_keep(logits_to_keep):
-    model = build_transformer().eval()
-
-    with pytest.raises(ValueError, match="non-negative integer"):
-        model(torch.tensor([[1, 2, 3]]), logits_to_keep=logits_to_keep)
-
-
-def test_forward_rejects_logits_to_keep_with_targets():
+@pytest.mark.parametrize("mask_shape", [(1, 2), (1, 4), (2, 3), (3,)])
+def test_forward_requires_attention_mask_to_match_input_shape(mask_shape):
     model = build_transformer()
     input_ids = torch.tensor([[1, 2, 3]])
-    targets = torch.tensor([[2, 3, 4]])
 
-    with pytest.raises(ValueError, match="must be 0 when targets are provided"):
-        model(input_ids, targets, logits_to_keep=1)
+    with pytest.raises(ValueError, match="must match the input IDs shape"):
+        model(input_ids, attention_mask=torch.ones(mask_shape))
 
 
 def test_qk_positional_embedding_prepares_once_and_applies_per_layer():
@@ -237,7 +207,7 @@ def test_custom_attention_constructor_accepts_qk_positional_embedding():
     assert isinstance(model.blocks[0].attn, CustomAttention)
 
 
-def test_masked_rotary_forward_compiles_as_one_full_graph():
+def test_masked_rotary_training_compiles_as_one_full_graph():
     model = Transformer(
         TransformerConfig(
             embedding_dimension=8,
@@ -258,15 +228,28 @@ def test_masked_rotary_forward_compiles_as_one_full_graph():
             vocab_size=10,
             num_layers=1,
         )
-    ).eval()
-    input_ids = torch.tensor([[1, 2, 3, 4]])
-    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    )
+    input_ids = torch.tensor([[0, 1, 2, 3], [4, 5, 6, 0]])
+    targets = torch.tensor([[-1, 2, 3, 4], [5, 6, 7, -1]])
+    attention_mask = torch.tensor([[0, 1, 1, 1], [1, 1, 1, 0]])
 
-    expected = model(input_ids, attention_mask=attention_mask)
+    expected = model(input_ids, targets, attention_mask=attention_mask)
+    expected[1].backward()
+    expected_gradients = {
+        name: parameter.grad.clone() for name, parameter in model.named_parameters()
+    }
+    model.zero_grad(set_to_none=True)
     compiled = torch.compile(model, backend="eager", fullgraph=True)
-    actual = compiled(input_ids, attention_mask=attention_mask)
+    actual = compiled(input_ids, targets, attention_mask=attention_mask)
+    actual[1].backward()
 
+    assert actual[0].shape == (2, 4, 10)
+    assert torch.isfinite(actual[1])
     torch.testing.assert_close(actual[0], expected[0])
+    torch.testing.assert_close(actual[1], expected[1])
+    for name, parameter in model.named_parameters():
+        assert torch.isfinite(parameter.grad).all()
+        torch.testing.assert_close(parameter.grad, expected_gradients[name])
 
 
 def test_transformer_builds_self_contained_branch_configs():

@@ -39,11 +39,7 @@ class Llama2Loader:
     def build_model(self, rank):
         transformer_config = TransformerConfig.from_yml(self.MODEL_ARCH_FILE)
 
-        with torch.no_grad():
-            llama2_7b = Transformer(transformer_config)
-            llama2_7b.to(rank)
-            llama2_7b.eval()
-        return llama2_7b
+        return Transformer(transformer_config).to(rank)
 
     def convert_state_dict(self, original_state_dict):
         name_changes = [
@@ -68,31 +64,24 @@ def main():
         Llama2Loader().build_state_dict()
 
     device = get_device()
-    with torch.no_grad():
-        llama2_7b = Llama2Loader().build_model("meta")
-        state_dict = torch.load(Llama2Loader.WEIGHTS_FILE, map_location="cpu")
-        llama2_7b.load_state_dict(state_dict, assign=True)
+    llama2_7b = Llama2Loader().build_model("meta")
+    state_dict = torch.load(Llama2Loader.WEIGHTS_FILE, map_location="cpu")
+    llama2_7b.load_state_dict(state_dict, assign=True)
+    del state_dict
+    gc.collect()
 
-        del state_dict
-        gc.collect()
-
-        messages = [
-            {"role": "user", "content": "Who is Claude Shannon?"},
-        ]
-
-        llama2_7b.to(device)
-        tokenizer = AutoTokenizer.from_pretrained(Llama2Loader.HF_MODEL_NAME)
-        pipeline = TextGenerationPipeline(llama2_7b, tokenizer)
-        pipeline.prompt(
-            messages,
-            max_new_tokens=100,
-            temperature=0,
-            apply_chat_template=True,
-            stream=True,
-            debug=True,
-            device=device,
-            use_cache=True,
-        )
+    llama2_7b.to(device).eval()
+    tokenizer = AutoTokenizer.from_pretrained(Llama2Loader.HF_MODEL_NAME)
+    pipeline = TextGenerationPipeline(llama2_7b, tokenizer)
+    pipeline.prompt(
+        [{"role": "user", "content": "Who is Claude Shannon?"}],
+        max_new_tokens=100,
+        temperature=0,
+        apply_chat_template=True,
+        stream=True,
+        debug=True,
+        device=device,
+    )
 
 
 if __name__ == "__main__":

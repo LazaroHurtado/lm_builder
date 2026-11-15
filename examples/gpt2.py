@@ -38,11 +38,7 @@ class GPT2Loader:
             approximate="tanh",
         )
 
-        with torch.no_grad():
-            gpt2_xl = Transformer(transformer_config)
-            gpt2_xl.to(rank)
-            gpt2_xl.eval()
-        return gpt2_xl
+        return Transformer(transformer_config).to(rank)
 
     @staticmethod
     def convert_state_dict(original_state_dict):
@@ -80,44 +76,27 @@ def main():
         GPT2Loader.build_state_dict()
 
     device = get_device()
-    with torch.no_grad():
-        gpt2_xl = GPT2Loader.build_model("meta")
-        state_dict = torch.load(GPT2Loader.WEIGHTS_FILE, map_location="cpu")
-        gpt2_xl.load_state_dict(state_dict, assign=True)
+    gpt2_xl = GPT2Loader.build_model("meta")
+    state_dict = torch.load(GPT2Loader.WEIGHTS_FILE, map_location="cpu")
+    gpt2_xl.load_state_dict(state_dict, assign=True)
+    del state_dict
+    gc.collect()
 
-        del state_dict
-        gc.collect()
-
-        gpt2_xl.to(device)
-        gpt2_xl = torch.compile(gpt2_xl, fullgraph=True)
-        tokenizer = AutoTokenizer.from_pretrained(
-            GPT2Loader.HF_MODEL_NAME, clean_up_tokenization_spaces=True
-        )
-        pipeline = TextGenerationPipeline(gpt2_xl, tokenizer)
-        prompt = "Claude Shannon, the"
-        generation_kwargs = {
-            "max_new_tokens": 200,
-            "temperature": 0.7,
-            "stream": True,
-            "debug": True,
-            "device": device,
-        }
-
-        print("Generating with KV cache:")
-        print(prompt, end="", flush=True)
-        pipeline.prompt(
-            prompt,
-            use_cache=True,
-            **generation_kwargs,
-        )
-
-        print("\nGenerating without KV cache:")
-        print(prompt, end="", flush=True)
-        pipeline.prompt(
-            prompt,
-            use_cache=False,
-            **generation_kwargs,
-        )
+    gpt2_xl.to(device).eval()
+    tokenizer = AutoTokenizer.from_pretrained(
+        GPT2Loader.HF_MODEL_NAME, clean_up_tokenization_spaces=True
+    )
+    pipeline = TextGenerationPipeline(torch.compile(gpt2_xl, fullgraph=True), tokenizer)
+    prompt = "Claude Shannon, the"
+    print(prompt, end="", flush=True)
+    pipeline.prompt(
+        prompt,
+        max_new_tokens=200,
+        temperature=0.7,
+        stream=True,
+        debug=True,
+        device=device,
+    )
 
 
 if __name__ == "__main__":

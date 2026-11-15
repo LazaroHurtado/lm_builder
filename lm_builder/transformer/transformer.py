@@ -74,7 +74,7 @@ class Transformer(nn.Module):
         if attention_mask is not None:
             position_ids = attention_mask.long().cumsum(dim=-1) - 1
             position_ids.masked_fill_(~attention_mask, 0)
-            return position_ids[:, -sequence_length:]
+            return position_ids
         return torch.arange(
             sequence_length,
             device=x.device,
@@ -87,45 +87,14 @@ class Transformer(nn.Module):
         targets=None,
         attention_mask=None,
         position_ids=None,
-        cache_position=None,
-        *,
-        logits_to_keep=0,
-        _kv_caches=None,
     ):
         B, T = x.size()  # pylint: disable=invalid-name
         assert T <= self.context_length
-        if (
-            not isinstance(logits_to_keep, int)
-            or isinstance(logits_to_keep, bool)
-            or logits_to_keep < 0
-        ):
-            raise ValueError("logits_to_keep must be a non-negative integer.")
-        if targets is not None and logits_to_keep:
-            raise ValueError("logits_to_keep must be 0 when targets are provided.")
-
-        if _kv_caches is not None:
-            if len(_kv_caches) != len(self.blocks):
-                raise ValueError("A KV cache is required for each transformer block.")
-            if position_ids is None:
-                raise ValueError("Position IDs are required when using a KV cache.")
-            if cache_position is None:
-                raise ValueError("Cache positions are required when using a KV cache.")
-            if cache_position.ndim != 1 or cache_position.numel() != T:
-                raise ValueError(
-                    "Cache positions must match the input sequence length."
-                )
-            cache_position = cache_position.to(device=x.device, dtype=torch.long)
 
         if attention_mask is not None:
-            if (
-                attention_mask.ndim != 2
-                or attention_mask.size(0) != B
-                or attention_mask.size(1) < T
-            ):
-                raise ValueError("Attention mask must cover the input sequence.")
+            if attention_mask.shape != (B, T):
+                raise ValueError("Attention mask must match the input IDs shape.")
             attention_mask = attention_mask.to(device=x.device, dtype=bool)
-            if _kv_caches is not None:
-                attention_mask = attention_mask[:, -T:]
 
         position_ids = self._prepare_position_ids(
             x,
@@ -148,20 +117,15 @@ class Transformer(nn.Module):
             )
 
         routing_losses = []
-        for layer_index, block in enumerate(self.blocks):
-            kv_cache = None if _kv_caches is None else _kv_caches[layer_index]
+        for block in self.blocks:
             x, routing_loss = block(
                 x,
                 attention_mask=attention_mask,
                 qk_position_data=qk_position_data,
-                kv_cache=kv_cache,
-                cache_position=cache_position,
             )
             if routing_loss is not None:
                 routing_losses.append(routing_loss)
         x = self.norm(x)
-        if logits_to_keep:
-            x = x[:, -logits_to_keep:, :]
         # (B, T, C) -> (B, T, V)
         logits = self.lm_head(x)
 

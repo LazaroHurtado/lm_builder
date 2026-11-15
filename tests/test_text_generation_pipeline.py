@@ -1,7 +1,11 @@
+from pathlib import Path
+import runpy
 from types import SimpleNamespace
 
+import pytest
 import torch
 from torch import nn
+from transformers import AutoTokenizer, GenerationConfig
 
 from lm_builder import TextGenerationPipeline
 from lm_builder.attention import (
@@ -10,35 +14,25 @@ from lm_builder.attention import (
     CausalMultiHeadAttention,
 )
 from lm_builder.ffn import FeedForward, FeedForwardConfig
-from lm_builder.transformer import TransformerConfig
+from lm_builder.positional_embeddings import (
+    AbsolutePE,
+    LearnablePE,
+    PositionalEmbeddingConfig,
+    RotaryPE,
+)
+from lm_builder.transformer import Transformer, TransformerConfig
 
 
-class FakeTokenizer:
-    def __init__(self):
-        self.pad_token = None
-        self.eos_token = "<eos>"
-        self.eos_token_id = None
-        self.padding_side = None
-
-    def __call__(self, prompts, return_tensors, padding):
-        assert return_tensors == "pt"
-        assert padding
-        return SimpleNamespace(
-            input_ids=torch.tensor([[0, 0, 2], [3, 4, 5]]),
-            attention_mask=torch.tensor([[0, 0, 1], [1, 1, 1]]),
-        )
-
-    def batch_decode(self, output_ids, skip_special_tokens):
-        assert skip_special_tokens
-        return ["decoded"] * output_ids.size(0)
-
-
-def build_config(context_length=8):
+def build_config(context_length=4, position_type=None):
     return TransformerConfig(
         embedding_dimension=8,
         context_length=context_length,
         attention_config=AttentionConfig(
-            qk_positional_embedding=None,
+            qk_positional_embedding=(
+                PositionalEmbeddingConfig(positional_embedding_type=RotaryPE)
+                if position_type is RotaryPE
+                else None
+            ),
             layers=[
                 AttentionLayerConfig(
                     context_length=context_length,
@@ -55,155 +49,114 @@ def build_config(context_length=8):
         ),
         vocab_size=10,
         num_layers=1,
+        positional_embedding=None if position_type is RotaryPE else position_type,
     )
 
 
-class RecordingModel(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-        self.context_length = config.context_length
-        self.blocks = nn.ModuleList()
-        self.attention_masks = []
-        self.position_ids = []
-        self.cache_positions = []
+class FakeTokenizer:
+    pad_token = None
+    eos_token = "<eos>"
+    eos_token_id = None
+    padding_side = None
 
-    def forward(
-        self,
-        x,
-        targets=None,
-        attention_mask=None,
-        position_ids=None,
-        cache_position=None,
-        *,
-        logits_to_keep=0,
-        _kv_caches=None,
-    ):
-        self.attention_masks.append(attention_mask.clone())
-        self.position_ids.append(position_ids.clone())
-        self.cache_positions.append(
-            None if cache_position is None else cache_position.clone()
+    def __call__(self, prompts, return_tensors, padding):
+        assert return_tensors == "pt"
+        assert padding
+        return SimpleNamespace(
+            input_ids=torch.tensor([[0, 0, 2], [3, 4, 5]]),
+            attention_mask=torch.tensor([[0, 0, 1], [1, 1, 1]]),
         )
-        logits = torch.zeros(
-            (*x.shape, self.config.vocab_size),
-            device=x.device,
-        )
-        logits[..., 1] = 1
-        return logits, None, None
+
+    def decode(self, output_ids, skip_special_tokens):
+        assert skip_special_tokens
+        return " ".join(str(token) for token in output_ids.tolist())
+
+    def batch_decode(self, output_ids, skip_special_tokens):
+        return [self.decode(row, skip_special_tokens) for row in output_ids]
 
 
 class ScriptedModel(nn.Module):
-    def __init__(self, config, generated_token_ids):
+    def __init__(self, generated_token_ids, context_length=4):
         super().__init__()
-        self.config = config
-        self.context_length = config.context_length
-        self.blocks = nn.ModuleList()
+        self.context_length = context_length
         self.generated_token_ids = generated_token_ids
-        self.forward_calls = 0
+        self.inputs = []
+        self.attention_masks = []
 
-    def forward(
-        self,
-        x,
-        targets=None,
-        attention_mask=None,
-        position_ids=None,
-        cache_position=None,
-        *,
-        logits_to_keep=0,
-        _kv_caches=None,
-    ):
+    def forward(self, x, attention_mask=None):
         next_token_ids = torch.tensor(
-            self.generated_token_ids[self.forward_calls],
-            device=x.device,
+            self.generated_token_ids[len(self.inputs)], device=x.device
         )
-        logits = torch.full(
-            (*x.shape, self.config.vocab_size),
-            float("-inf"),
-            device=x.device,
+        self.inputs.append(x.clone())
+        self.attention_masks.append(
+            None if attention_mask is None else attention_mask.clone()
         )
+        logits = torch.full((*x.shape, 10), float("-inf"), device=x.device)
         logits[:, -1].scatter_(1, next_token_ids[:, None], 0)
-        self.forward_calls += 1
         return logits, None, None
 
 
-def build_scripted_pipeline(generated_token_ids, tokenizer=None):
-    model = ScriptedModel(
-        build_config(),
-        generated_token_ids,
-    ).eval()
-    return TextGenerationPipeline(model, tokenizer)
-
-
-def test_pipeline_owns_model_without_being_module():
-    model = ScriptedModel(build_config(), [[1]]).eval()
-    pipeline = TextGenerationPipeline(model, tokenizer=None)
-
-    assert pipeline.model is model
-    assert not isinstance(pipeline, nn.Module)
-
-
-def test_prompt_passes_and_extends_tokenizer_attention_mask():
+@pytest.mark.parametrize("stream", [False, True])
+def test_prompt_extends_and_crops_input_and_padding_mask(stream, capsys):
     tokenizer = FakeTokenizer()
-    model = RecordingModel(build_config(context_length=3)).eval()
+    model = ScriptedModel([[1, 1], [1, 1]], context_length=3)
     pipeline = TextGenerationPipeline(model, tokenizer)
 
     outputs = pipeline.prompt(
-        ["short", "longer"],
-        max_new_tokens=2,
-        temperature=0,
-        use_cache=False,
+        ["short", "longer"], max_new_tokens=2, temperature=0, stream=stream
     )
 
-    assert outputs == ["decoded", "decoded"]
+    assert outputs == ["0 0 2 1 1", "3 4 5 1 1"]
     assert tokenizer.pad_token == tokenizer.eos_token
     assert tokenizer.padding_side == "left"
-    assert torch.equal(
-        model.attention_masks[0],
-        torch.tensor([[0, 0, 1], [1, 1, 1]]),
-    )
-    assert torch.equal(
-        model.attention_masks[1],
-        torch.tensor([[0, 1, 1], [1, 1, 1]]),
-    )
-    assert torch.equal(
-        model.position_ids[0],
-        torch.tensor([[0, 0, 0], [0, 1, 2]]),
-    )
-    assert torch.equal(
-        model.position_ids[1],
-        torch.tensor([[0, 0, 1], [0, 1, 2]]),
-    )
+    assert torch.equal(model.inputs[0], torch.tensor([[0, 0, 2], [3, 4, 5]]))
+    assert torch.equal(model.inputs[1], torch.tensor([[0, 2, 1], [4, 5, 1]]))
+    assert torch.equal(model.attention_masks[0], torch.tensor([[0, 0, 1], [1, 1, 1]]))
+    assert torch.equal(model.attention_masks[1], torch.tensor([[0, 1, 1], [1, 1, 1]]))
+    assert capsys.readouterr().out == (" 1 1\n" if stream else "")
 
 
-def test_cached_generation_passes_incremental_position_ids():
-    model = RecordingModel(build_config(context_length=8)).eval()
+@pytest.mark.parametrize(
+    ("position_type", "compile_model"),
+    [(None, False), (AbsolutePE, False), (LearnablePE, False), (RotaryPE, True)],
+)
+def test_generation_matches_full_context_recomputation(position_type, compile_model):
+    torch.manual_seed(17)
+    model = Transformer(build_config(position_type=position_type)).eval()
+    input_ids = torch.tensor([[0, 2, 3], [4, 5, 6]])
+    attention_mask = torch.tensor([[0, 1, 1], [1, 1, 1]])
+    expected_tokens = []
+    sequence = input_ids
+    mask = attention_mask
+    with torch.no_grad():
+        for _ in range(5):
+            logits, _, _ = model(sequence[:, -4:], attention_mask=mask[:, -4:])
+            next_token = logits[:, -1].argmax(dim=-1, keepdim=True)
+            expected_tokens.append(next_token)
+            sequence = torch.cat((sequence, next_token), dim=1)
+            mask = torch.cat((mask, torch.ones(2, 1, dtype=mask.dtype)), dim=1)
+
+    input_lengths = []
+
+    def record_input(_model, inputs):
+        assert not torch.is_grad_enabled()
+        input_lengths.append(inputs[0].size(1))
+
+    if compile_model:
+        model = torch.compile(model, backend="eager", fullgraph=True)
+    handle = model.register_forward_pre_hook(record_input)
     pipeline = TextGenerationPipeline(model, tokenizer=None)
-
-    list(
+    generated = list(
         pipeline.generate(
-            torch.tensor([[0, 2, 3], [4, 5, 6]]),
-            attention_mask=torch.tensor([[0, 1, 1], [1, 1, 1]]),
-            max_new_tokens=3,
-            temperature=0,
+            input_ids, attention_mask=attention_mask, max_new_tokens=5, temperature=0
         )
     )
+    handle.remove()
 
-    assert len(model.position_ids) == 3
-    assert torch.equal(
-        model.position_ids[0],
-        torch.tensor([[0, 0, 1], [0, 1, 2]]),
+    assert input_lengths == [3, 4, 4, 4, 4]
+    torch.testing.assert_close(
+        torch.cat(generated, dim=1), torch.cat(expected_tokens, dim=1)
     )
-    assert torch.equal(
-        model.position_ids[1],
-        torch.tensor([[2], [3]]),
-    )
-    assert torch.equal(
-        model.position_ids[2],
-        torch.tensor([[3], [4]]),
-    )
-    assert torch.equal(model.cache_positions[0], torch.tensor([0, 1, 2]))
-    assert torch.equal(model.cache_positions[1], torch.tensor([3]))
-    assert torch.equal(model.cache_positions[2], torch.tensor([4]))
 
 
 def test_top_p_sampling_keeps_the_token_that_crosses_the_threshold(monkeypatch):
@@ -216,7 +169,6 @@ def test_top_p_sampling_keeps_the_token_that_crosses_the_threshold(monkeypatch):
         return torch.tensor([[1]])
 
     monkeypatch.setattr(torch, "multinomial", sample)
-
     token = TextGenerationPipeline._sample_next_token(
         logits=torch.tensor([[4.0, 3.0, 2.0]]),
         temperature=1.0,
@@ -230,86 +182,118 @@ def test_top_p_sampling_keeps_the_token_that_crosses_the_threshold(monkeypatch):
     assert sampled_probabilities[0, 2] == 0
 
 
-def test_generate_stops_after_tokenizer_eos():
-    tokenizer = SimpleNamespace(eos_token_id=2)
-    pipeline = build_scripted_pipeline([[2], [4]], tokenizer)
-
-    generated = list(
-        pipeline.generate(
-            torch.tensor([[1]]),
-            max_new_tokens=5,
-            temperature=0,
-            use_cache=False,
-        )
-    )
-
-    assert torch.equal(torch.cat(generated, dim=1), torch.tensor([[2]]))
-    assert pipeline.model.forward_calls == 1
-
-
-def test_generate_without_eos_uses_max_new_tokens():
-    pipeline = build_scripted_pipeline([[3], [4], [5]])
-
+@pytest.mark.parametrize(
+    ("tokenizer", "eos_token_id", "expected"),
+    [
+        (SimpleNamespace(eos_token_id=2), None, [3, 2]),
+        (None, [2, 3], [3]),
+        (None, None, [3, 2, 5]),
+    ],
+)
+def test_generation_stops_at_eos_or_token_limit(tokenizer, eos_token_id, expected):
+    model = ScriptedModel([[3], [2], [5]])
+    pipeline = TextGenerationPipeline(model, tokenizer)
     generated = list(
         pipeline.generate(
             torch.tensor([[1]]),
             max_new_tokens=3,
             temperature=0,
-            use_cache=False,
+            eos_token_id=eos_token_id,
         )
     )
 
-    assert torch.equal(torch.cat(generated, dim=1), torch.tensor([[3, 4, 5]]))
-    assert pipeline.model.forward_calls == 3
-
-
-def test_generate_stops_after_secondary_eos_token_id():
-    pipeline = build_scripted_pipeline([[3], [4]])
-
-    generated = list(
-        pipeline.generate(
-            torch.tensor([[1]]),
-            max_new_tokens=5,
-            temperature=0,
-            use_cache=False,
-            eos_token_id=[2, 3],
-        )
-    )
-
-    assert torch.equal(torch.cat(generated, dim=1), torch.tensor([[3]]))
-    assert pipeline.model.forward_calls == 1
+    assert torch.equal(torch.cat(generated, dim=1), torch.tensor([expected]))
+    assert len(model.inputs) == len(expected)
 
 
 def test_generate_repeats_eos_for_finished_batch_rows():
-    pipeline = build_scripted_pipeline(
-        [
-            [2, 4],
-            [7, 5],
-            [8, 2],
-            [9, 9],
-        ],
-    )
-
-    generated = torch.cat(
-        list(
-            pipeline.generate(
-                torch.tensor([[1, 1], [1, 1]]),
-                max_new_tokens=5,
-                temperature=0,
-                use_cache=False,
-                eos_token_id=2,
-            )
-        ),
-        dim=1,
+    model = ScriptedModel([[2, 4], [7, 5], [8, 2]])
+    pipeline = TextGenerationPipeline(model, tokenizer=None)
+    generated = list(
+        pipeline.generate(
+            torch.tensor([[1, 1], [1, 1]]),
+            max_new_tokens=5,
+            temperature=0,
+            eos_token_id=2,
+        )
     )
 
     assert torch.equal(
-        generated,
-        torch.tensor(
-            [
-                [2, 2, 2],
-                [4, 5, 2],
-            ]
+        torch.cat(generated, dim=1), torch.tensor([[2, 2, 2], [4, 5, 2]])
+    )
+    assert len(model.inputs) == 3
+
+
+def test_prompt_with_zero_new_tokens_returns_input():
+    pipeline = TextGenerationPipeline(ScriptedModel([]), FakeTokenizer())
+
+    assert pipeline.prompt(["short", "longer"], max_new_tokens=0) == ["0 0 2", "3 4 5"]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"temperature": -1},
+        {"top_k": 0},
+        {"top_p": 0},
+        {"max_new_tokens": -1},
+        {"attention_mask": torch.ones(1, 2)},
+    ],
+)
+def test_generation_rejects_invalid_inputs(kwargs):
+    pipeline = TextGenerationPipeline(ScriptedModel([[1]]), tokenizer=None)
+
+    with pytest.raises(ValueError):
+        list(pipeline.generate(torch.tensor([[1]]), **kwargs))
+
+
+@pytest.mark.parametrize(
+    ("example", "weights_file", "max_new_tokens", "chat"),
+    [
+        ("gpt2.py", "gpt2_weights.pth", 200, False),
+        ("llama2.py", "llama2_weights.pth", 100, True),
+        ("qwen3.py", "qwen3_0_6b_weights.pth", 4096, True),
+    ],
+)
+def test_example_entry_point_runs_generation(
+    example, weights_file, max_new_tokens, chat, tmp_path, monkeypatch
+):
+    example_path = Path(__file__).resolve().parents[1] / "examples" / example
+    torch.save(Transformer(build_config()).state_dict(), tmp_path / weights_file)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(TransformerConfig, "from_yml", lambda _path: build_config())
+    monkeypatch.setattr(torch, "compile", lambda model, **_kwargs: model)
+    monkeypatch.setattr(
+        AutoTokenizer, "from_pretrained", lambda *_args, **_kwargs: FakeTokenizer()
+    )
+    monkeypatch.setattr(
+        GenerationConfig,
+        "from_pretrained",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            temperature=0.7, top_k=3, top_p=0.9, eos_token_id=[2, 3]
         ),
     )
-    assert pipeline.model.forward_calls == 3
+    calls = []
+
+    def prompt(pipeline, prompts, **kwargs):
+        assert not pipeline.model.training
+        calls.append((prompts, kwargs))
+        return "generated"
+
+    monkeypatch.setattr(TextGenerationPipeline, "prompt", prompt)
+    runpy.run_path(str(example_path), run_name="__main__")
+
+    assert len(calls) == 1
+    prompts, options = calls[0]
+    assert prompts == (
+        [{"role": "user", "content": "Who is Claude Shannon?"}]
+        if chat
+        else "Claude Shannon, the"
+    )
+    assert options["max_new_tokens"] == max_new_tokens
+    assert options.get("apply_chat_template", False) == chat
+    assert options["stream"] and options["debug"]
+    if example == "qwen3.py":
+        assert options["top_k"] == 3
+        assert options["top_p"] == 0.9
+        assert options["eos_token_id"] == [2, 3]
